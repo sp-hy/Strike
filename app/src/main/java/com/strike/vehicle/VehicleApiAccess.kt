@@ -72,11 +72,10 @@ object VehicleApiAccess {
         "android.permission.BYDAUTO_POWER_GET",
     )
 
+    // SYSTEM_ALERT_WINDOW also lets the app start activities from the background (Android 10+).
     private val BACKGROUND_GRANTS = listOf(
         "pm grant \$pkg android.permission.SYSTEM_ALERT_WINDOW",
         "appops set \$pkg SYSTEM_ALERT_WINDOW allow",
-        "appops set \$pkg START_ACTIVITIES_FROM_BACKGROUND allow",
-        "cmd appops set \$pkg START_ACTIVITIES_FROM_BACKGROUND allow",
         "dumpsys deviceidle whitelist +\$pkg",
         "appops set \$pkg RUN_IN_BACKGROUND allow",
         "appops set \$pkg RUN_ANY_IN_BACKGROUND allow",
@@ -101,6 +100,8 @@ object VehicleApiAccess {
         val pkg = context.packageName
         var ok = true
         for (perm in CORE_PERMISSIONS + BYDAUTO_PERMISSIONS) {
+            // DiLink 5 makes BYDAUTO permissions install-time; pm grant rejects those it already gave.
+            if (held(context, perm)) continue
             if (!grant(shell, pkg, perm)) ok = false
         }
         applyHiddenApi(context, shell)
@@ -132,7 +133,8 @@ object VehicleApiAccess {
             body.isEmpty()
         // Unknown / undeclared on this firmware is not fatal — do not spam the log.
         if (!ok && (body.contains("Unknown permission", ignoreCase = true) ||
-                body.contains("has not requested permission", ignoreCase = true))) {
+                body.contains("has not requested permission", ignoreCase = true) ||
+                body.contains("not a changeable permission type", ignoreCase = true))) {
             return true
         }
         if (!ok && body.isNotBlank()) Logs.d(TAG, "grant $pkg $perm: $body")
@@ -156,10 +158,10 @@ object VehicleApiAccess {
         Logs.d(TAG, "applied DiLink 5 hidden-api exemption")
     }
 
-    private fun coreGranted(context: Context): Boolean {
-        val pm = context.packageManager
-        return CORE_PERMISSIONS.all { perm ->
-            pm.checkPermission(perm, context.packageName) == PackageManager.PERMISSION_GRANTED
-        }
-    }
+    private fun held(context: Context, perm: String): Boolean =
+        context.packageManager.checkPermission(perm, context.packageName) ==
+            PackageManager.PERMISSION_GRANTED
+
+    private fun coreGranted(context: Context): Boolean =
+        CORE_PERMISSIONS.all { held(context, it) }
 }

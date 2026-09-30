@@ -46,7 +46,12 @@ class Daemon(private val context: Context, private val shell: Shell) {
     @Synchronized
     fun stop(shutdown: () -> Boolean = { false }, force: Boolean = true): Boolean {
         if (shell.run(ScratchPaths.prepareShellCommand(stopWatchdogLine())) != 0) return false
-        return shell.run(ScratchPaths.prepareShellCommand(stopDaemonLine(shutdown(), force))) == 0
+        if (shell.run(ScratchPaths.prepareShellCommand(stopDaemonLine(shutdown(), force))) == 0) return true
+        // The stop shell can be killed as the daemon exits; what matters is that the daemon is gone.
+        val gone = !shell.check("pidof $CAM_PROCESS >/dev/null 2>&1") &&
+            shell.run(ScratchPaths.prepareShellCommand("rm -f $CAM_LOCK_PATH")) == 0
+        if (gone) Logs.d(TAG, "stop shell exited early but the daemon is gone")
+        return gone
     }
 
     private fun apkPath(): String? {
@@ -62,12 +67,16 @@ internal fun stopWatchdogLine(): String =
         killLine(CAM_SCRIPT_PATH) + "; rm -f $CAM_SCRIPT_PATH $CAM_WATCHDOG_PID_PATH"
 
 internal fun stopDaemonLine(graceful: Boolean, force: Boolean = true): String =
-    (if (graceful) "" else killLine(CAM_PROCESS, 15) + "; ") + "WAITED=0; " +
+    (if (graceful) "" else killDaemonLine(15) + "; ") + "WAITED=0; " +
         "while pidof $CAM_PROCESS >/dev/null 2>&1 && [ \$WAITED -lt 20 ]; do " +
         "sleep 1; WAITED=\$((WAITED + 1)); done; " +
-        (if (force) killLine(CAM_PROCESS) + "; " else "") +
+        (if (force) killDaemonLine(9) + "; " else "") +
         "if pidof $CAM_PROCESS >/dev/null 2>&1; then exit 1; fi; " +
         "rm -f $CAM_LOCK_PATH"
+
+// By process name: matching command lines can hit shells that merely mention the daemon.
+private fun killDaemonLine(signal: Int): String =
+    "for pid in \$(pidof $CAM_PROCESS 2>/dev/null); do kill -$signal \$pid 2>/dev/null; done"
 
 internal val DAEMON_CLASS: String = CameraDaemon::class.java.name
 

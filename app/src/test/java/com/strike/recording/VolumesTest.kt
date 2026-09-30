@@ -1,6 +1,7 @@
 package com.strike.recording
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -96,6 +97,15 @@ class VolumesTest {
         assertEquals("/storage/3439-3138", volumePathFor("sd", listing, null))
         assertEquals("8:1", volumeIdFor(listing, "C06F-A956"))
         assertEquals(listOf("8:1", "179:65"), allPublicIds(listing))
+    }
+
+    @Test
+    fun onlyHeadUnitsDeclaringNoCardSlotSkipTheSdUuid() {
+        assertTrue(hasNoCardSlot("nosdcard"))
+        assertTrue(hasNoCardSlot("tablet, nosdcard"))
+        assertFalse(hasNoCardSlot("tablet"))
+        assertFalse(hasNoCardSlot(""))
+        assertFalse(hasNoCardSlot(null))
     }
 
     @Test

@@ -53,16 +53,22 @@ class VehicleTelemetry(
             return null
         }
         // Open-DiKey BydVehicleInfoController: Statistic getters for SOC / range / fuel / kWh.
-        val soc = socOf(read(statistic, "getElecPercentageValue")?.toDouble())
+        val rawSoc = read(statistic, "getElecPercentageValue")
+        val soc = socOf(rawSoc?.toDouble())
         val fuel = fuelOf(read(statistic, "getFuelPercentageValue")?.toInt())
         val fuelRange = fuelRangeOf(read(statistic, "getFuelDrivingRangeValue")?.toInt())
+        val evRemaining = read(statistic, "getEVRemainingBatteryPower")
+        val powerRemaining = read(power, "getBatteryRemainPowerEV")
+        val remainingPower = read(statistic, "getRemainingBatteryPower")
         val remainingKwh = batteryKwhOf(
-            read(statistic, "getEVRemainingBatteryPower")?.toDouble()
-                ?: read(power, "getBatteryRemainPowerEV")?.toDouble(),
+            evRemaining?.toDouble() ?: powerRemaining?.toDouble(),
             soc
         ) {
-            read(statistic, "getRemainingBatteryPower")?.toInt()
+            remainingPower?.toInt()
         }
+        logEnergy("soc=$rawSoc statistic.getEVRemainingBatteryPower=$evRemaining " +
+            "power.getBatteryRemainPowerEV=$powerRemaining " +
+            "statistic.getRemainingBatteryPower=$remainingPower -> kWh=$remainingKwh")
         return VehicleSnapshot(
             soc = soc,
             rangeKm = rangeOf(read(statistic, "getElecDrivingRangeValue")?.toInt())
@@ -74,6 +80,15 @@ class VehicleTelemetry(
             accOn = accOnOf(read(bodywork, "getPowerLevel")?.toInt()),
             locked = lockOf(read(ota, "getLFDoorLockState")?.toInt())
         )
+    }
+
+    private var lastEnergyLog = ""
+
+    // Energy getters differ between BYD models; log the raw answers whenever they change.
+    private fun logEnergy(line: String) {
+        if (line == lastEnergyLog) return
+        lastEnergyLog = line
+        Logs.d(TAG, "energy $line")
     }
 
     fun accOn(): Boolean? = accOnOf(read(device(BODYWORK), "getPowerLevel")?.toInt())
@@ -159,7 +174,10 @@ internal fun fuelRangeOf(km: Int?): Int? = if (km != null && km in 1..1200) km e
 // Open-DiKey usable kWh band for Statistic.getEVRemainingBatteryPower.
 internal inline fun batteryKwhOf(directKwh: Double?, soc: Int?, fallbackTenthsKwh: () -> Int?): Double? {
     acceptKwh(directKwh, soc)?.let { return it }
-    return acceptKwh(fallbackTenthsKwh()?.div(10.0), soc)
+    val tenths = fallbackTenthsKwh() ?: return null
+    // The Shark answers getRemainingBatteryPower in percent, so 97% would read as 9.7 kWh.
+    if (soc != null && soc in 5..100 && kotlin.math.abs(tenths - soc) <= 1) return null
+    return acceptKwh(tenths / 10.0, soc)
 }
 
 internal fun acceptKwh(kwh: Double?, soc: Int?): Double? {

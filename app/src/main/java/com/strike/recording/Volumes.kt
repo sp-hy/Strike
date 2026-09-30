@@ -14,6 +14,7 @@ internal const val INTERNAL = "internal"
 private const val SD = "sd"
 private const val USB = "usb"
 private const val SD_UUID_PROP = "sys.byd.mSdcardUuid"
+private const val CHARACTERISTICS_PROP = "ro.build.characteristics"
 private const val STORAGE_ROOT = "/storage"
 
 /** Linux block majors: mmcblk is the card slot, sd is anything on USB. */
@@ -24,6 +25,14 @@ private const val REVALIDATE_MS = 15_000L
 
 // A probe that times out under load is not a removed card. Only an answered listing retires one.
 private const val GRACE_MS = 60_000L
+
+// Head units without a card slot (the Shark) deny apps this property, and each read logs a libc error.
+private val hasCardSlot by lazy { !hasNoCardSlot(systemProperty(CHARACTERISTICS_PROP)) }
+
+internal fun hasNoCardSlot(characteristics: String?) =
+    characteristics?.split(',')?.any { it.trim() == "nosdcard" } == true
+
+private fun sdUuid(): String? = if (hasCardSlot) systemProperty(SD_UUID_PROP) else null
 
 private val cacheLock = Any()
 private var readAtMs = 0L
@@ -59,7 +68,7 @@ class Volumes(private val context: Context, private val shell: Shell) {
             return found
         }
         answeredAtMs = now
-        for (mount in parseVolumes(listing, systemProperty(SD_UUID_PROP))) {
+        for (mount in parseVolumes(listing, sdUuid())) {
             if (found.containsKey(mount.location)) continue
             found[mount.location] = measure(mount) ?: held[mount.location] ?: continue
         }
@@ -87,7 +96,7 @@ class Volumes(private val context: Context, private val shell: Shell) {
         mounted()[location]?.dir?.let { return it }
         if (location == INTERNAL) return Environment.getExternalStorageDirectory()
         val listing = shell.read(LIST_VOLUMES) ?: return null
-        val path = volumePathFor(location, listing, systemProperty(SD_UUID_PROP)) ?: return null
+        val path = volumePathFor(location, listing, sdUuid()) ?: return null
         return File(path)
     }
 

@@ -126,7 +126,8 @@ internal fun writeScriptLine(lines: List<String>): String {
             .replace("\"", "\\\"")
             .replace("$", "\\$")
             .replace("`", "\\`")
-        command.append("echo \"$escaped\" ")
+        // printf, not echo: some shells (dash) expand backslash escapes in echo.
+        command.append("printf '%s\\n' \"$escaped\" ")
         command.append(if (index == 0) "> " else ">> ")
         command.append("$CAM_SCRIPT_PATH; ")
     }

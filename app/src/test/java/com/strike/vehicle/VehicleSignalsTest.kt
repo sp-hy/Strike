@@ -115,6 +115,13 @@ class VehicleSignalsTest {
     }
 
     @Test
+    fun aPercentFallbackIsNotTenthsOfAKwh() {
+        assertNull(batteryKwhOf(null, 97) { 97 })
+        assertNull(batteryKwhOf(null, 97) { 96 })
+        assertEquals(28.7, batteryKwhOf(28.7, 97) { 97 }!!, 0.001)
+    }
+
+    @Test
     fun gearMapsTheAutoModeType() {
         assertEquals("P", gearOf(1))
         assertEquals("D", gearOf(4))
