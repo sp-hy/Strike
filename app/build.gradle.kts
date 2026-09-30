@@ -22,9 +22,6 @@ val sdkDirPath: String = run {
         ?: "${System.getProperty("user.home")}/AppData/Local/Android/Sdk"
 }
 
-// Read by .github/workflows/release.yml.
-val baseVersion = "0.5"
-
 val ndkVersionWanted = "26.1.10909125"
 val ndkDirPath: String = System.getenv("ANDROID_NDK_HOME")
     ?: "$sdkDirPath/ndk/$ndkVersionWanted"
@@ -154,10 +151,10 @@ android {
         // targetSdk 25: keeps parked surveillance free of O background limits.
         minSdk = 30
         targetSdk = 25
-        // CI passes -PbuildNumber so each main build is <baseVersion>.<n>; the updater needs numeric tags.
-        val buildNumber = providers.gradleProperty("buildNumber").orNull?.toIntOrNull()
+        // CI passes -PversionName/-PversionCode. The local default must stay parseable by the
+        // updater and older than any dated CI build.
         versionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull() ?: 5
-        versionName = if (buildNumber != null) "$baseVersion.$buildNumber" else baseVersion
+        versionName = providers.gradleProperty("versionName").orNull ?: "0.5"
 
         externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_shared" } }
     }

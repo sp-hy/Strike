@@ -190,10 +190,9 @@ thread. The connector exits if the app process dies.
 Every push to `main` that touches the app or build files runs
 `.github/workflows/release.yml`. It runs the unit tests, builds a signed release
 APK, and publishes it to [sp-hy/Strike releases](https://github.com/sp-hy/Strike/releases)
-as **Strike.apk** under a tag such as `v0.5.12`. The version is `baseVersion` in
-`app/build.gradle.kts` plus the workflow run number; raise `baseVersion` (for
-example to `0.6`) for a larger release. The run can also be started by hand from
-the Actions tab.
+as **Strike.apk** under a UTC date and time tag such as `v2026.09.30-1105`, which
+is also the APK's `versionName`. The run can also be started by hand from the
+Actions tab.
 
 One-time setup:
 

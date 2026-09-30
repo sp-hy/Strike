@@ -44,15 +44,11 @@ jobs:
       - name: Version
         id: version
         run: |
-          # versionName must stay numeric for the in-app updater (v0.5.<n>).
-          BASE="$(grep -oP '^val baseVersion = "\K[0-9]+(\.[0-9]+)?(?=")' app/build.gradle.kts)"
-          if [ -z "$BASE" ]; then
-            echo "::error::Could not read the base version from app/build.gradle.kts"
-            exit 1
-          fi
-          NAME="${BASE}.${{ github.run_number }}"
+          # UTC so names never go backwards across daylight saving; the updater parses YYYY.MM.DD-HHMM.
+          NOW="$(date -u +%s)"
+          NAME="$(date -u -d "@${NOW}" +'%Y.%m.%d-%H%M')"
           # Minutes since 2020-01-01 UTC: always increases and fits an Android versionCode.
-          CODE="$(( ($(date -u +%s) - 1577836800) / 60 ))"
+          CODE="$(( (NOW - 1577836800) / 60 ))"
           echo "name=${NAME}" >> "$GITHUB_OUTPUT"
           echo "code=${CODE}" >> "$GITHUB_OUTPUT"
           echo "tag=v${NAME}" >> "$GITHUB_OUTPUT"
@@ -84,7 +80,7 @@ jobs:
             exit 1
           fi
           ./gradlew --no-daemon :app:assembleRelease \
-            -PbuildNumber="${{ github.run_number }}" \
+            -PversionName="${{ steps.version.outputs.name }}" \
             -PversionCode="${{ steps.version.outputs.code }}"
 
       - name: Collect APK

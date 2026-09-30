@@ -18,11 +18,13 @@ internal data class Release(
         .put("url", url).put("bytes", bytes).put("sha256", sha256)
 }
 
+/** Accepts `0.5`, `0.5.1` and CI builds such as `2026.09.30-2105` (UTC date, then time). */
 internal fun versionParts(version: String): List<Int>? {
     val name = version.removePrefix("v")
-    if (!name.matches(Regex("[0-9]+(?:\\.[0-9]+){0,2}"))) return null
-    val parts = name.split('.').map { it.toIntOrNull() ?: return null }
-    return parts + List(3 - parts.size) { 0 }
+    if (!name.matches(Regex("[0-9]+(?:\\.[0-9]+){0,2}(?:-[0-9]+)?"))) return null
+    val build = name.substringAfter('-', "0").toIntOrNull() ?: return null
+    val parts = name.substringBefore('-').split('.').map { it.toIntOrNull() ?: return null }
+    return parts + List(3 - parts.size) { 0 } + build
 }
 
 internal fun compareVersions(left: String, right: String): Int {
@@ -48,7 +50,7 @@ internal fun savedRelease(payload: JSONObject): Release = checkedRelease(
     payload.getString("url"), payload.getLong("bytes"), payload.getString("sha256"))
 
 private fun checkedRelease(version: String, notes: String, url: String, bytes: Long, sha256: String): Release {
-    require(versionParts(version) != null) { "Use a release tag such as v0.2" }
+    require(versionParts(version) != null) { "Use a release tag such as v2026.09.30-2105" }
     val uri = URI(url)
     require(uri.scheme == "https" && uri.host == "github.com" && uri.port == -1 &&
         uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null &&

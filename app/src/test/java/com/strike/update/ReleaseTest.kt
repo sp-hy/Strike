@@ -13,9 +13,12 @@ class ReleaseTest {
         assertTrue(compareVersions("0.1", "0.2") < 0)
         assertEquals(0, compareVersions("v0.1", "0.1.0"))
         assertEquals(0, compareVersions("1", "1.0.0"))
-        assertTrue(compareVersions("v0.5.12", "0.5.9") > 0)
-        assertTrue(compareVersions("v0.5.1", "0.5") > 0)
-        for (version in listOf("", "v", "-1", "1.2.3.4", "1.0-beta", "1.2/evil", "2147483648")) {
+        assertTrue(compareVersions("v2026.09.30-2105", "0.5") > 0)
+        assertTrue(compareVersions("v2026.09.30-2105", "2026.09.30-0959") > 0)
+        assertTrue(compareVersions("v2026.10.01-0000", "2026.09.30-2359") > 0)
+        assertEquals(0, compareVersions("v2026.09.30-2105", "2026.9.30-2105"))
+        for (version in listOf("", "v", "-1", "1.2.3.4", "1.0-beta", "1.2/evil", "2147483648",
+                "2026.09.30-", "2026.09.30-1-2")) {
             assertNull(version, versionParts(version))
         }
     }
@@ -26,6 +29,11 @@ class ReleaseTest {
         assertEquals("v0.2", release.version)
         assertEquals("Changes", release.notes)
         assertEquals(release, savedRelease(release.json()))
+
+        val dated = payload().put("tag_name", "v2026.09.30-2105")
+        asset(dated).put("browser_download_url",
+            "https://github.com/sp-hy/Strike/releases/download/v2026.09.30-2105/Strike.apk")
+        assertEquals("v2026.09.30-2105", releaseFrom(dated)!!.version)
     }
 
     @Test
