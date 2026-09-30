@@ -3,17 +3,11 @@ package com.strike.daemon
 import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import com.strike.MainActivity
 
-/** Bring Strike up after reboot so shell attach can restore the recorder. */
+/**
+ * Receiving boot creates the process; [com.strike.StrikeApp] then restores the recorder and
+ * [com.strike.boot.AppLauncher] opens the app if the user asked for that.
+ */
 class BootStart : BroadcastReceiver() {
-    override fun onReceive(context: Context, intent: Intent?) {
-        val action = intent?.action ?: return
-        if (action != Intent.ACTION_BOOT_COMPLETED &&
-            action != Intent.ACTION_LOCKED_BOOT_COMPLETED) return
-        context.startActivity(
-            Intent(context, MainActivity::class.java)
-                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        )
-    }
+    override fun onReceive(context: Context, intent: Intent?) = Unit
 }

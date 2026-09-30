@@ -3,6 +3,8 @@ package com.strike
 import android.app.Application
 import android.os.Handler
 import android.os.Looper
+import com.strike.boot.AdbKeepAlive
+import com.strike.boot.AppLauncher
 import com.strike.camera.FastCamNative
 import com.strike.core.Crashes
 import com.strike.core.Logs
@@ -52,6 +54,8 @@ class StrikeApp : Application() {
             }, "setup-restart").start()
         }
         dashboard = DashboardClient(this, shell)
+        AdbKeepAlive.start(this)
+        AppLauncher.attach(this, shell)
         Triggers(this, shell).start()
     }
 }

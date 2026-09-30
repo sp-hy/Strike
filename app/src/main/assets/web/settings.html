@@ -45,7 +45,7 @@
     <main class="page">
         <div class="hero">
             <h1 class="hero__title">Settings</h1>
-            <p class="hero__sub">Updates, the screen PIN, and diagnostics.</p>
+            <p class="hero__sub">Updates, startup, the screen PIN, and diagnostics.</p>
         </div>
         <div class="columns">
             <section class="card columns__wide" id="updates">
@@ -88,6 +88,17 @@
                         <span class="card__tools">
                             <button class="btn" id="pinClear" type="button" hidden>Turn off</button>
                             <button class="btn" id="securityOpen" type="button" disabled>Set PIN</button>
+                        </span>
+                    </div>
+                </section>
+                <section class="card" id="startupCard">
+                    <div class="card__actions">
+                        <div class="card__lead">
+                            <h2 class="card__name" id="openAppLabel">Open when the car starts</h2>
+                            <p class="note">Bring Strike to the screen when the head unit wakes. Recording restarts either way.</p>
+                        </div>
+                        <span class="card__tools">
+                            <button class="switch" id="openApp" type="button" aria-pressed="false" aria-labelledby="openAppLabel" disabled><span class="switch__knob"></span></button>
                         </span>
                     </div>
                 </section>

@@ -2,6 +2,7 @@ package com.strike.vehicle
 
 import android.content.Context
 import android.content.pm.PackageManager
+import com.strike.boot.KeepAliveListener
 import com.strike.core.Logs
 import com.strike.daemon.Shell
 
@@ -79,6 +80,7 @@ object VehicleApiAccess {
         "dumpsys deviceidle whitelist +\$pkg",
         "appops set \$pkg RUN_IN_BACKGROUND allow",
         "appops set \$pkg RUN_ANY_IN_BACKGROUND allow",
+        "cmd notification allow_listener ${KeepAliveListener.component("\$pkg")}",
     )
 
     @Volatile private var ensuring = false
