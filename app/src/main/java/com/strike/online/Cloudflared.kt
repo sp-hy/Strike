@@ -96,7 +96,8 @@ internal fun localAddresses(): List<String> = try {
         it.isUp && !it.isLoopback
     }.flatMap { Collections.list(it.inetAddresses) }.filter {
         it is Inet4Address && it.isSiteLocalAddress && !it.isLinkLocalAddress
-    }.mapNotNull { it.hostAddress }.distinct().sorted()
+    }.mapNotNull { it.hostAddress }.distinct()
+        .sortedWith(compareBy<String> { !it.startsWith("192.168.") }.thenBy { it })
 } catch (e: java.net.SocketException) {
     emptyList()
 }

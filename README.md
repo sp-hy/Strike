@@ -4,7 +4,7 @@ Lightweight dashcam, parked surveillance, and live cameras for BYD head units.
 Built around recording, with a small web interface for the car's screen and your
 phone.
 
-**[Download the APK](https://github.com/UnrealSalty/Strike/releases/latest)** · [strikebyd.com](https://strikebyd.com) · [Get started](#get-started) · [Report a bug](https://github.com/UnrealSalty/Strike/issues) · [Official Discord](https://discord.gg/DTBZRgHX3s)
+**[Download the APK](https://github.com/sp-hy/Strike/releases/latest)** · [GitHub](https://github.com/sp-hy/Strike) · [Get started](#get-started) · [Report a bug](https://github.com/sp-hy/Strike/issues)
 
 ![Strike dashboard with vehicle status, recording storage, and quick actions](art/screenshots/dashboard.png)
 
@@ -55,7 +55,7 @@ on its own is GitHub's release API, at most once a day.
 
 ## Get started
 
-1. Download **Strike.apk** from the [latest release](https://github.com/UnrealSalty/Strike/releases/latest)
+1. Download **Strike.apk** from the [latest release](https://github.com/sp-hy/Strike/releases/latest)
   and install it on the head unit.
 2. Open Strike and grant storage and microphone permissions. Audio is recorded
   only when you enable cabin audio.
@@ -191,6 +191,10 @@ Build setup, emulator instructions, release publishing, and contribution guideli
 are in [CONTRIBUTING.md](CONTRIBUTING.md#build).
 
 ## Credits
+
+This is a Shark-focused fork of [Strike](https://github.com/UnrealSalty/Strike) by
+UnrealSalty, the original app this build is based on. Thanks to UnrealSalty for
+the dashcam, surveillance, and web interface it started from.
 
 Strike builds on [Overdrive](https://github.com/yash-srivastava/Overdrive-release)'s
 work on BYD camera access, vehicle integration, and parked operation. It also

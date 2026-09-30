@@ -187,11 +187,19 @@ thread. The connector exits if the app process dies.
 
 ## Publishing a release
 
-1. Increase `versionCode` and `versionName` in `app/build.gradle.kts`.
-2. Build a signed release APK with the original keystore.
-3. Create a GitHub release with a matching tag, such as `v0.2` for version `0.2`.
-4. Attach the signed APK as **Strike.apk** and publish the release as the latest
-   stable release. Drafts and prereleases are not offered by the checker.
+Every push to `main` that touches the app or build files runs
+`.github/workflows/release.yml`. It runs the unit tests, builds a signed release
+APK, and publishes it to [sp-hy/Strike releases](https://github.com/sp-hy/Strike/releases)
+as **Strike.apk** under a tag such as `v0.5.12`. The version is `baseVersion` in
+`app/build.gradle.kts` plus the workflow run number; raise `baseVersion` (for
+example to `0.6`) for a larger release. The run can also be started by hand from
+the Actions tab.
+
+One-time setup:
+
+1. Run `.\tools\create-release-keystore.ps1` to create `strike-release.jks`.
+2. Add the four printed values as repository secrets: `SIGNING_KEYSTORE_BASE64`,
+   `SIGNING_STORE_PASSWORD`, `SIGNING_KEY_ALIAS` and `SIGNING_KEY_PASSWORD`.
 
 Keep the signing key backed up outside the repository. The updater checks the
 APK checksum, package, signing key, version, Android requirement, and processor

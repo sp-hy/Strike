@@ -3,7 +3,8 @@ package com.strike.update
 import org.json.JSONObject
 import java.net.URI
 
-internal const val RELEASES_API = "https://api.github.com/repos/UnrealSalty/Strike/releases/latest"
+internal const val RELEASE_REPO = "sp-hy/Strike"
+internal const val RELEASES_API = "https://api.github.com/repos/$RELEASE_REPO/releases/latest"
 internal const val MAX_APK_BYTES = 150L * 1024 * 1024
 
 internal data class Release(
@@ -51,7 +52,7 @@ private fun checkedRelease(version: String, notes: String, url: String, bytes: L
     val uri = URI(url)
     require(uri.scheme == "https" && uri.host == "github.com" && uri.port == -1 &&
         uri.rawUserInfo == null && uri.rawQuery == null && uri.rawFragment == null &&
-        uri.rawPath == "/UnrealSalty/Strike/releases/download/$version/Strike.apk") {
+        uri.rawPath == "/$RELEASE_REPO/releases/download/$version/Strike.apk") {
         "The release APK link is invalid"
     }
     require(bytes in 1..MAX_APK_BYTES) { "The release APK size is invalid" }

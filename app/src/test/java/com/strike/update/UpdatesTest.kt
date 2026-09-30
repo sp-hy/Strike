@@ -15,7 +15,7 @@ class UpdatesTest {
     private var now = 1_000_000_000L
     private var online = true
     private var offered: Release? = Release("v0.2", "Changes",
-        "https://github.com/UnrealSalty/Strike/releases/download/v0.2/Strike.apk", 3, "a".repeat(64))
+        "https://github.com/sp-hy/Strike/releases/download/v0.2/Strike.apk", 3, "a".repeat(64))
     private var fetches = 0
     private var downloads = 0
     private var installs = 0

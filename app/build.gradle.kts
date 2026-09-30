@@ -22,6 +22,9 @@ val sdkDirPath: String = run {
         ?: "${System.getProperty("user.home")}/AppData/Local/Android/Sdk"
 }
 
+// Read by .github/workflows/release.yml.
+val baseVersion = "0.5"
+
 val ndkVersionWanted = "26.1.10909125"
 val ndkDirPath: String = System.getenv("ANDROID_NDK_HOME")
     ?: "$sdkDirPath/ndk/$ndkVersionWanted"
@@ -151,13 +154,30 @@ android {
         // targetSdk 25: keeps parked surveillance free of O background limits.
         minSdk = 30
         targetSdk = 25
-        versionCode = 5
-        versionName = "0.5"
+        // CI passes -PbuildNumber so each main build is <baseVersion>.<n>; the updater needs numeric tags.
+        val buildNumber = providers.gradleProperty("buildNumber").orNull?.toIntOrNull()
+        versionCode = providers.gradleProperty("versionCode").orNull?.toIntOrNull() ?: 5
+        versionName = if (buildNumber != null) "$baseVersion.$buildNumber" else baseVersion
 
         externalNativeBuild { cmake { arguments += "-DANDROID_STL=c++_shared" } }
     }
 
     externalNativeBuild { cmake { path = file("src/main/cpp/CMakeLists.txt") } }
+
+    signingConfigs {
+        val storePath = System.getenv("SIGNING_STORE_FILE")
+        val storePass = System.getenv("SIGNING_STORE_PASSWORD")
+        val alias = System.getenv("SIGNING_KEY_ALIAS")
+        val keyPass = System.getenv("SIGNING_KEY_PASSWORD")
+        if (listOf(storePath, storePass, alias, keyPass).none { it.isNullOrBlank() }) {
+            create("release") {
+                storeFile = file(storePath!!)
+                storePassword = storePass
+                keyAlias = alias
+                keyPassword = keyPass
+            }
+        }
+    }
 
     buildTypes {
         debug {
@@ -172,6 +192,7 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+            signingConfigs.findByName("release")?.let { signingConfig = it }
         }
     }
 

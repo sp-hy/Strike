@@ -13,6 +13,8 @@ class ReleaseTest {
         assertTrue(compareVersions("0.1", "0.2") < 0)
         assertEquals(0, compareVersions("v0.1", "0.1.0"))
         assertEquals(0, compareVersions("1", "1.0.0"))
+        assertTrue(compareVersions("v0.5.12", "0.5.9") > 0)
+        assertTrue(compareVersions("v0.5.1", "0.5") > 0)
         for (version in listOf("", "v", "-1", "1.2.3.4", "1.0-beta", "1.2/evil", "2147483648")) {
             assertNull(version, versionParts(version))
         }
@@ -42,7 +44,7 @@ class ReleaseTest {
     fun metadataCannotSendTheDownloaderToAnUntrustedAddress() {
         val good = asset(payload()).getString("browser_download_url")
         for (url in listOf(good.replace("https:", "http:"), good.replace("github.com", "github.com.evil"),
-                good.replace("UnrealSalty", "someone"), good.replace("v0.2", "v0.3"),
+                good.replace("sp-hy", "UnrealSalty"), good.replace("v0.2", "v0.3"),
                 good.replace("github.com", "name@github.com"), "$good?extra=1", "$good#fragment")) {
             assertThrows(url, IllegalArgumentException::class.java) {
                 releaseFrom(payload().also { asset(it).put("browser_download_url", url) })
@@ -69,5 +71,5 @@ class ReleaseTest {
     private fun payload() = JSONObject().put("tag_name", "v0.2").put("body", "Changes")
         .put("assets", JSONArray().put(JSONObject().put("name", "Strike.apk").put("state", "uploaded")
             .put("size", 1024).put("digest", "sha256:" + "a".repeat(64))
-            .put("browser_download_url", "https://github.com/UnrealSalty/Strike/releases/download/v0.2/Strike.apk")))
+            .put("browser_download_url", "https://github.com/sp-hy/Strike/releases/download/v0.2/Strike.apk")))
 }

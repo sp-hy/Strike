@@ -116,12 +116,24 @@ internal class Mount(val location: String, val path: String)
 
 internal class Room(val freeMb: Int, val totalMb: Int)
 
+/**
+ * Block major of a removable volume ID, or null for private, emulated and stub volumes.
+ * AOSP lists `public:8,97`; BYD DiLink lists `8:1` with no prefix.
+ */
+internal fun blockMajor(id: String): String? {
+    val parts = id.removePrefix("public:").split(',', ':')
+    if (parts.size != 2 || parts.any { it.isEmpty() || !it.all(Char::isDigit) }) return null
+    return parts[0]
+}
+
+private fun isPublic(id: String) = blockMajor(id) != null
+
 // sm mount takes the public volume ID, even when its UUID is unavailable.
 internal fun volumeIdFor(listing: String, uuid: String): String? {
     for (line in listing.lineSequence()) {
         val fields = line.trim().split(Regex("\\s+"))
         if (fields.size < 3) continue
-        if (!fields[0].startsWith("public")) continue
+        if (!isPublic(fields[0])) continue
         if (!fields[2].equals(uuid, ignoreCase = true)) continue
         if (fields[2] == "null" || fields[2].isEmpty()) continue
         return fields[0]
@@ -135,7 +147,7 @@ internal fun mountIds(listing: String, uuid: String): List<String> {
     for (line in listing.lineSequence()) {
         val fields = line.trim().split(Regex("\\s+"))
         if (fields.isEmpty()) continue
-        if (fields[0].startsWith("public:")) ids.add(fields[0])
+        if (isPublic(fields[0])) ids.add(fields[0])
     }
     return ids
 }
@@ -149,7 +161,7 @@ internal fun allPublicIds(listing: String): List<String> {
     for (line in listing.lineSequence()) {
         val fields = line.trim().split(Regex("\\s+"))
         if (fields.isEmpty()) continue
-        if (fields[0].startsWith("public:")) ids.add(fields[0])
+        if (isPublic(fields[0])) ids.add(fields[0])
     }
     return ids
 }
@@ -160,7 +172,7 @@ internal fun volumePathFor(location: String, listing: String, sdUuid: String?): 
         val fields = line.trim().split(Regex("\\s+"))
         if (fields.size < 3) continue
         val descriptor = fields[0]
-        if (!descriptor.startsWith("public")) continue
+        if (!isPublic(descriptor)) continue
         val uuid = fields[2]
         if (uuid == "null" || uuid.isEmpty()) continue
         if (classify(descriptor, uuid, sdUuid) == location) return "$STORAGE_ROOT/$uuid"
@@ -217,7 +229,7 @@ internal fun parseVolumes(listing: String, sdUuid: String?): List<Mount> {
         val fields = line.trim().split(Regex("\\s+"))
         if (fields.size < 3) continue
         val descriptor = fields[0]
-        if (!descriptor.startsWith("public")) continue
+        if (!isPublic(descriptor)) continue
         if (fields[1] != "mounted") continue
         val uuid = fields[2]
         if (uuid == "null" || uuid.isEmpty()) continue
@@ -230,7 +242,7 @@ internal fun classify(descriptor: String, uuid: String, sdUuid: String?): String
     if (sdUuid != null && sdUuid.isNotEmpty()) {
         return if (uuid.equals(sdUuid, ignoreCase = true)) SD else USB
     }
-    return when (descriptor.substringAfter(':', "").substringBefore(',')) {
+    return when (blockMajor(descriptor)) {
         MMC_MAJOR -> SD
         SCSI_MAJOR -> USB
         else -> SD

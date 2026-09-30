@@ -81,6 +81,33 @@ class VolumesTest {
     }
 
     @Test
+    fun dilinkListsPublicVolumesWithoutThePrefix() {
+        val listing = """
+            private mounted null
+            emulated;0 mounted null
+            8:1 mounted C06F-A956
+            179:65 unmounted 3439-3138
+        """.trimIndent()
+
+        val mounts = parseVolumes(listing, null)
+        assertEquals(1, mounts.size)
+        assertEquals("usb", mounts[0].location)
+        assertEquals("/storage/C06F-A956", mounts[0].path)
+        assertEquals("/storage/3439-3138", volumePathFor("sd", listing, null))
+        assertEquals("8:1", volumeIdFor(listing, "C06F-A956"))
+        assertEquals(listOf("8:1", "179:65"), allPublicIds(listing))
+    }
+
+    @Test
+    fun onlyBlockDeviceIdsAreRemovable() {
+        assertEquals("8", blockMajor("public:8,97"))
+        assertEquals("179", blockMajor("179:65"))
+        assertNull(blockMajor("private"))
+        assertNull(blockMajor("emulated;0"))
+        assertNull(blockMajor("stub:1"))
+    }
+
+    @Test
     fun aVolumeThatCannotBeMeasuredIsNotOffered() {
         assertNull(parseDf("df: /storage/3439-3138: No such file or directory"))
         assertTrue(parseVolumes("", "3439-3138").isEmpty())
