@@ -93,6 +93,8 @@ class VehicleTelemetry(
 
     fun accOn(): Boolean? = accOnOf(read(device(BODYWORK), "getPowerLevel")?.toInt())
 
+    fun batteryVolts(): Double? = read(device(OTA), "getBatteryPowerVoltage")?.toDouble()
+
     fun parkingSnapshot(): VehicleSnapshot = VehicleSnapshot(
         soc = null,
         rangeKm = null,

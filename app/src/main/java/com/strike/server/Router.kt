@@ -14,6 +14,7 @@ import com.strike.server.api.RECORDER_API
 import com.strike.server.api.RecordingsApi
 import com.strike.server.api.SecurityApi
 import com.strike.server.api.OnlineApi
+import com.strike.server.api.PowerApi
 import com.strike.server.api.SurveillanceApi
 import com.strike.server.api.UpdatesApi
 import com.strike.online.Online
@@ -46,6 +47,7 @@ class Router(context: Context, private val pin: Pin, shell: Shell, online: Onlin
     private val remote = OnlineApi(online, browsers)
     private val updater = UpdatesApi(updates)
     private val diagnostics = DiagnosticsApi(shell)
+    private val power = PowerApi(context, shell)
     private val live = LiveStream(DaemonClient())
 
     fun locked(token: String?): Boolean = pin.isSet() && !PinSession.allows(token)
@@ -104,6 +106,16 @@ class Router(context: Context, private val pin: Pin, shell: Shell, online: Onlin
         path == "/api/diagnostics" -> when (method) {
             "GET" -> diagnostics.settings()
             "POST" -> diagnostics.save(body)
+            else -> methodNotAllowed()
+        }
+        path == "/api/power" -> when (method) {
+            "GET" -> power.settings()
+            "POST" -> power.save(body)
+            else -> methodNotAllowed()
+        }
+        path == "/api/power/cloud" -> when (method) {
+            "POST" -> power.signIn(body)
+            "DELETE" -> power.signOut()
             else -> methodNotAllowed()
         }
         path == "/api/recording/clips" -> if (method == "GET") recordings.clips() else methodNotAllowed()

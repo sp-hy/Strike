@@ -54,6 +54,24 @@ internal class ParkedLease(private val file: File, private val slot: Int) {
         } finally { closeUnclaimed() }
     }
 
+    /** Runs [action] only while neither consumer holds a claim; a new claim waits behind it. */
+    @Synchronized
+    fun whenUnclaimed(action: () -> Unit): Boolean {
+        if (isHeld) return false
+        val opened = open()
+        return try {
+            val gate = lock(opened, 0) ?: return false
+            gate.use {
+                val mine = lock(opened, slot.toLong()) ?: return false
+                mine.use {
+                    val other = lock(opened, (3 - slot).toLong()) ?: return false
+                    other.use { action() }
+                }
+            }
+            true
+        } finally { closeUnclaimed() }
+    }
+
     private fun closeUnclaimed() {
         if (isHeld) return
         claim = null

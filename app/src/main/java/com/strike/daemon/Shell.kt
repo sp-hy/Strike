@@ -181,7 +181,7 @@ class Shell internal constructor(
     }
 }
 
-private fun localCommand(command: String): AdbShellResponse? = try {
+internal fun localCommand(command: String): AdbShellResponse? = try {
     val child = ProcessBuilder("timeout", "-s", "KILL", "45", "sh", "-c", "umask 022; $command")
         .redirectErrorStream(true).start()
     try {
@@ -228,7 +228,7 @@ private fun adbOpener(context: Context): () -> Dadb? {
     }
 }
 
-private fun portOpen(): Boolean = try {
+internal fun portOpen(): Boolean = try {
     Socket().use {
         it.connect(InetSocketAddress(HOST, PORT), PORT_PROBE_MS)
         true

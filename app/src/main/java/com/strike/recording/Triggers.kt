@@ -2,7 +2,10 @@ package com.strike.recording
 
 import android.content.Context
 import com.strike.core.Config
+import com.strike.core.Logs
+import com.strike.daemon.BatteryGuard
 import com.strike.daemon.DaemonClient
+import com.strike.daemon.ParkedPower
 import com.strike.daemon.Shell
 import com.strike.surveillance.EventStorage
 import com.strike.surveillance.LOCK_FALLBACK_MS
@@ -10,6 +13,7 @@ import com.strike.vehicle.VehicleCache
 import com.strike.vehicle.VehicleSnapshot
 import com.strike.vehicle.VehicleTelemetry
 
+private const val TAG = "Power"
 private const val EVERY_MS = 5_000L
 private const val PARKED = "P"
 private const val OFF = "off"
@@ -26,6 +30,7 @@ class Triggers(
     private val events = EventStorage(context, shell)
     private val clips = Storage(context, shell)
     private val cabin = CabinAudio()
+    private val battery = BatteryGuard()
 
     fun start() {
         Thread({ watch() }, "triggers").also { it.isDaemon = true }.start()
@@ -36,6 +41,7 @@ class Triggers(
             // Full energy snapshot for the dashboard (shell cannot call BYD IPC).
             val energy = vehicle.snapshot()
             val snapshot = vehicle.parkingSnapshot()
+            val lowBattery = watchBattery(energy?.accOn ?: snapshot.accOn)
             VehicleCache.write(
                 shell,
                 VehicleSnapshot(
@@ -46,10 +52,12 @@ class Triggers(
                     fuelRangeKm = energy?.fuelRangeKm,
                     gear = energy?.gear ?: snapshot.gear,
                     accOn = energy?.accOn ?: snapshot.accOn,
-                    locked = energy?.locked ?: snapshot.locked
+                    locked = energy?.locked ?: snapshot.locked,
+                    batteryVolts = battery.volts,
+                    lowBattery = lowBattery
                 )
             )
-            val connected = daemon.vehicle(snapshot, onVehicle)
+            val connected = daemon.vehicle(snapshot, lowBattery, onVehicle)
             superviseAudio(connected && shouldRecord(mode(), snapshot), snapshot)
             // Always publish so the daemon has a clip path (SD → internal fallback).
             clips.publish(shell)
@@ -59,6 +67,17 @@ class Triggers(
             }
             Thread.sleep(EVERY_MS)
         }
+    }
+
+    private fun watchBattery(accOn: Boolean?): Boolean {
+        val wasLow = battery.isLow
+        val low = battery.observe(vehicle.batteryVolts(), ParkedPower.cutoffVolts(), accOn)
+        if (low && !wasLow) {
+            Logs.w(TAG, "12 V battery at ${battery.volts} V; releasing parked power until the car starts")
+        } else if (!low && wasLow) {
+            Logs.d(TAG, "12 V battery recovered; parked power may be held again")
+        }
+        return low
     }
 
     // Start cabin audio before muxer startup, only when the car reports ACC on.

@@ -447,8 +447,17 @@ main {
     margin-left: var(--gap);
 }
 
-.columns__narrow > .card + .card {
+.columns__narrow > .card + .card,
+.columns__wide > .card + .card {
     margin-top: var(--gap);
+}
+
+.power__account {
+    margin: -4px 0 14px;
+}
+
+.power__account > .btn + .btn {
+    margin-left: var(--gap);
 }
 
 .card__title {

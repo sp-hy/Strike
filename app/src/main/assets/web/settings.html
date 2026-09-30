@@ -45,10 +45,11 @@
     <main class="page">
         <div class="hero">
             <h1 class="hero__title">Settings</h1>
-            <p class="hero__sub">Updates, startup, the screen PIN, and diagnostics.</p>
+            <p class="hero__sub">Updates, parked power, startup, the screen PIN, and diagnostics.</p>
         </div>
         <div class="columns">
-            <section class="card columns__wide" id="updates">
+            <div class="columns__wide">
+            <section class="card" id="updates">
                 <div class="card__actions">
                     <h2 class="card__name">Updates</h2>
                     <span class="card__tools">
@@ -77,6 +78,73 @@
                 </div>
                 <p class="note">Checks once a day when Strike opens. Downloads start when you choose.</p>
             </section>
+            <section class="card" id="powerCard">
+                <div class="card__actions">
+                    <div class="card__lead">
+                        <h2 class="card__name" id="powerKeepAwakeLabel">Keep the car awake when off</h2>
+                        <p class="card__sub" id="powerState"><span class="sk sk--line"></span></p>
+                        <p class="note">Hold the head unit awake whenever the car is off, even with surveillance and Online off. Surveillance and Online hold it on their own.</p>
+                    </div>
+                    <span class="card__tools">
+                        <button class="switch" id="powerKeepAwake" type="button" aria-pressed="false" aria-labelledby="powerKeepAwakeLabel" disabled><span class="switch__knob"></span></button>
+                    </span>
+                </div>
+                <div class="card__actions">
+                    <div class="card__lead">
+                        <h3 class="card__name" id="powerCameraLabel">Camera heartbeat</h3>
+                        <p class="note">Tell the camera system it is in use every 2 seconds while parked. Try this if parked video stops after a while.</p>
+                    </div>
+                    <span class="card__tools">
+                        <button class="switch" id="powerCamera" type="button" aria-pressed="false" aria-labelledby="powerCameraLabel" disabled><span class="switch__knob"></span></button>
+                    </span>
+                </div>
+                <div class="card__actions">
+                    <div class="card__lead">
+                        <h3 class="card__name" id="powerShutdownLabel">Shutdown hold</h3>
+                        <p class="note">Experimental. Ask the head unit to wait for Strike before powering down. Some firmware refuses this.</p>
+                    </div>
+                    <span class="card__tools">
+                        <button class="switch" id="powerShutdown" type="button" aria-pressed="false" aria-labelledby="powerShutdownLabel" disabled><span class="switch__knob"></span></button>
+                    </span>
+                </div>
+                <div class="card__actions">
+                    <div class="card__lead">
+                        <h3 class="card__name" id="powerNetworkLabel">Keep Wi-Fi and mobile data on</h3>
+                        <p class="note">Turn them back on if the car switches them off while parked. Only radios that were on when parked power started.</p>
+                    </div>
+                    <span class="card__tools">
+                        <button class="switch" id="powerNetwork" type="button" aria-pressed="false" aria-labelledby="powerNetworkLabel" disabled><span class="switch__knob"></span></button>
+                    </span>
+                </div>
+                <div class="card__actions">
+                    <div class="card__lead">
+                        <h3 class="card__name" id="powerCloudLabel">BYD cloud heartbeat</h3>
+                        <p class="card__sub" id="cloudState">Not signed in</p>
+                        <p class="note">Ask BYD's servers for the car's status every 15 seconds while parked, which makes them wake the car's modem. Uses your BYD app account.</p>
+                    </div>
+                    <span class="card__tools">
+                        <button class="switch" id="powerCloud" type="button" aria-pressed="false" aria-labelledby="powerCloudLabel" disabled><span class="switch__knob"></span></button>
+                    </span>
+                </div>
+                <div class="power__account">
+                    <button class="btn" id="cloudOpen" type="button" disabled>Sign in</button>
+                    <button class="btn" id="cloudSignOut" type="button" hidden>Sign out</button>
+                </div>
+                <div class="card__actions">
+                    <div class="card__lead">
+                        <h3 class="card__name" id="powerCutoffLabel">Low 12 V battery cutoff</h3>
+                        <p class="note">Release parked power after three low readings in a row. It stays released until the car starts or the battery is charging.</p>
+                    </div>
+                </div>
+                <div class="seg seg--fill" id="powerCutoff" role="group" aria-labelledby="powerCutoffLabel">
+                    <button class="seg__btn" type="button" data-value="off" aria-pressed="false" disabled>Off</button>
+                    <button class="seg__btn" type="button" data-value="11.6" aria-pressed="false" disabled>11.6 V</button>
+                    <button class="seg__btn" type="button" data-value="11.8" aria-pressed="false" disabled>11.8 V</button>
+                    <button class="seg__btn" type="button" data-value="12.0" aria-pressed="false" disabled>12.0 V</button>
+                    <button class="seg__btn" type="button" data-value="12.2" aria-pressed="false" disabled>12.2 V</button>
+                </div>
+            </section>
+            </div>
             <div class="columns__narrow">
                 <section class="card" id="securityCard">
                     <div class="card__actions">
@@ -127,6 +195,33 @@
         </section>
     </div>
 
+    <div class="modal" id="cloud" hidden>
+        <section class="modal__panel modal__panel--narrow" role="dialog" aria-modal="true" aria-labelledby="cloudTitle">
+            <div class="modal__head">
+                <h2 class="modal__title" id="cloudTitle">BYD account</h2>
+                <button class="btn" id="cloudClose" type="button">Close</button>
+            </div>
+            <div class="modal__body">
+                <div class="row row--control">
+                    <label class="row__label" for="cloudEmail">Email</label>
+                    <input class="input" id="cloudEmail" type="email" maxlength="254" autocomplete="off" autocapitalize="none" spellcheck="false">
+                </div>
+                <div class="row row--control">
+                    <label class="row__label" for="cloudPassword">Password</label>
+                    <input class="input" id="cloudPassword" type="password" maxlength="128" autocomplete="new-password" spellcheck="false">
+                </div>
+                <div class="row row--control">
+                    <label class="row__label" for="cloudCountry">Country</label>
+                    <select class="input" id="cloudCountry"></select>
+                </div>
+                <p class="note">Strike signs in the way the BYD app does and keeps the password on the head unit. It only asks for the car's status and never sends commands.</p>
+            </div>
+            <div class="modal__foot">
+                <button class="btn btn--primary" id="cloudSignIn" type="button">Sign in</button>
+            </div>
+        </section>
+    </div>
+
     <div class="modal" id="security" hidden>
         <div class="modal__panel modal__panel--narrow">
             <div class="modal__head">
@@ -150,5 +245,6 @@
     <script src="js/release-notes.js"></script>
     <script src="js/updates.js"></script>
     <script src="js/diagnostics.js"></script>
+    <script src="js/power.js"></script>
 </body>
 </html>

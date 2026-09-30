@@ -117,6 +117,27 @@ class ParkedLeaseTest {
         assertFalse(powered)
     }
 
+    @Test fun staleHardwareIsOnlyClearedWhileNeitherConsumerHoldsPower() {
+        val file = temporary.newFile()
+        val camera = ParkedLease(file, 1)
+        val online = ParkedLease(file, 2)
+        assertTrue(online.acquire())
+        assertFalse(camera.whenUnclaimed { fail("Online still owns power") })
+        assertTrue(online.release {})
+        assertTrue(camera.acquire())
+        assertFalse(camera.whenUnclaimed { fail("Camera still owns power") })
+        assertTrue(camera.release {})
+        var cleared = false
+        assertTrue(camera.whenUnclaimed {
+            assertFalse(online.acquire())
+            cleared = true
+        })
+        assertTrue(cleared)
+        assertFalse(camera.isHeld)
+        assertTrue(online.acquire())
+        assertTrue(online.release {})
+    }
+
     @Test fun aFailedFinalHardwareReleaseStillClosesTheClaimAndGate() {
         val file = temporary.newFile()
         val camera = ParkedLease(file, 1)

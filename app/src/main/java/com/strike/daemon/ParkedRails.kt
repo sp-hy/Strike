@@ -31,6 +31,11 @@ private const val SETTLE_MS = 1_000L
 private const val ACTIVITY_MS = 10_000L
 private const val VOTE_MS = 5 * 60_000L
 private const val WAKE_MS = 8 * 60_000L
+private const val AWAKE_VOTE_MS = 30_000L
+private const val MCU_CHECK_MS = 10_000L
+private const val MCU_WAIT_MS = 10_000L
+private const val MCU_TRIES = 6
+private const val MCU_BACKOFF_MS = 5 * 60_000L
 
 // Hold the MCU/ISP rails and AP awake for parked capture, matching Overdrive's AccSentry.
 object ParkedRails {
@@ -49,6 +54,10 @@ object ParkedRails {
     private var lease: ParkedLease? = null
     private var cameraOwner = true
     private var leaseFailed = false
+    private var mcuCheckAtMs = 0L
+    private var mcuWakeAtMs = 0L
+    private var mcuFailures = 0
+    private val owner = File("$STRIKE_DIR/parked-power.owner")
 
     @Synchronized
     fun hold(camera: Boolean = true, stillWanted: () -> Boolean = { true }) {
@@ -63,6 +72,11 @@ object ParkedRails {
             return
         }
         cameraOwner = camera
+        // Recorded before the first HAL write so a crash leaves votes clearStale() can undo.
+        if (!markOwned()) {
+            try { claim.release {} } catch (e: IOException) { leaseFailed = true }
+            return
+        }
         isHeld = true
         try {
             wakeMcu()
@@ -90,15 +104,18 @@ object ParkedRails {
         userActivity()
     }
 
+    /** [keepAwake] follows Overdrive's DiLink 5 lease: 30 s votes and an MCU that is woken before voting. */
     @Synchronized
-    fun tick(): Boolean {
+    fun tick(keepAwake: Boolean = false): Boolean {
         if (!isHeld) return false
         val now = System.currentTimeMillis()
         if (now - activityAtMs >= ACTIVITY_MS) {
             activityAtMs = now
             userActivity()
         }
-        if (now - voteAtMs >= VOTE_MS) {
+        if (keepAwake) watchMcu(now)
+        val voteEvery = if (keepAwake) AWAKE_VOTE_MS else VOTE_MS
+        if (mcuWakeAtMs == 0L && now - voteAtMs >= voteEvery) {
             voteAtMs = now
             vote()
         }
@@ -123,6 +140,8 @@ object ParkedRails {
         } finally {
             if (!claim.isHeld) {
                 isHeld = false
+                mcuWakeAtMs = 0L
+                mcuFailures = 0
                 wakeLock?.let { if (it.isHeld) it.release() }
                 wakeLock = null
                 DaemonLog.d(TAG, "parked power released for ${if (cameraOwner) "surveillance" else "Online"}")
@@ -139,9 +158,33 @@ object ParkedRails {
         false
     }
 
+    /** Undoes votes left by a Strike process that died holding parked power. */
+    @Synchronized
+    fun clearStale() {
+        if (isHeld || !owner.exists()) return
+        try {
+            if (claim(camera = true).whenUnclaimed { releaseVotes() }) {
+                DaemonLog.w(TAG, "released parked power left by an earlier Strike process")
+            }
+        } catch (e: IOException) {
+            if (!leaseFailed) DaemonLog.w(TAG, "Could not check for stale parked power")
+            leaseFailed = true
+        }
+    }
+
     private fun claim(camera: Boolean): ParkedLease = lease ?:
         ParkedLease(File("$STRIKE_DIR/parked-power.lock"), if (camera) 1 else 2).also { lease = it }
 
+    private fun markOwned(): Boolean = try {
+        owner.parentFile?.mkdirs()
+        owner.writeText(if (cameraOwner) "surveillance" else "online")
+        true
+    } catch (e: IOException) {
+        DaemonLog.w(TAG, "Could not record parked power ownership; not holding")
+        false
+    }
+
+    // MCU_HOLD=0 asks the MCU to sleep, so it is only written after this app recorded holding it.
     private fun releaseVotes() {
         writeSpecial(SENTRY_ENTER, 0)
         writeSpecial(SENTRY_STATE, 2)
@@ -150,6 +193,38 @@ object ParkedRails {
         writeSpecial(ISP_NEED, 0)
         writeSpecial(ISP_WORK, 0)
         writePower(MCU_HOLD, 0)
+        owner.delete()
+    }
+
+    private fun watchMcu(now: Long) {
+        if (mcuWakeAtMs != 0L) {
+            val status = mcuStatus()
+            if (status == 1 || status == 10) {
+                mcuWakeAtMs = 0L
+                mcuFailures = 0
+                vote()
+                return
+            }
+            if (now - mcuWakeAtMs < MCU_WAIT_MS) return
+            mcuWakeAtMs = 0L
+            mcuFailures++
+            if (mcuFailures == MCU_TRIES) {
+                DaemonLog.w(TAG, "MCU stayed at status $status after $MCU_TRIES wakes; retrying every 5 min")
+            }
+            vote()
+            return
+        }
+        val every = if (mcuFailures >= MCU_TRIES) MCU_BACKOFF_MS else MCU_CHECK_MS
+        if (now - mcuCheckAtMs < every) return
+        mcuCheckAtMs = now
+        val status = mcuStatus() ?: return
+        if (status == 1 || status == 10) {
+            mcuFailures = 0
+            return
+        }
+        writePower(MCU_HOLD, 1)
+        requestMcuWake()
+        mcuWakeAtMs = now
     }
 
     private fun vote(): Int {
@@ -208,20 +283,24 @@ object ParkedRails {
 
     private fun wakeMcu() {
         wakeAtMs = System.currentTimeMillis()
-        val device = powerDevice() ?: return
-        try {
-            val method = device.javaClass.getMethod("wakeUpMcu")
-            val rc = method.invoke(device)
-            if (rc is Number && rc.toInt() != 0) {
-                DaemonLog.w(TAG, "MCU wake returned ${rc.toInt()}")
-            }
-        } catch (e: ReflectiveOperationException) {
-            DaemonLog.w(TAG, "MCU wake failed: ${e.javaClass.simpleName}")
-        }
+        if (!requestMcuWake()) return
         val status = mcuStatus()
         if (status != null && status != 1 && status != 10) {
             DaemonLog.w(TAG, "MCU status $status after wake")
         }
+    }
+
+    private fun requestMcuWake(): Boolean {
+        val device = powerDevice() ?: return false
+        try {
+            val rc = device.javaClass.getMethod("wakeUpMcu").invoke(device)
+            if (rc is Number && rc.toInt() != 0 && mcuFailures < MCU_TRIES) {
+                DaemonLog.w(TAG, "MCU wake returned ${rc.toInt()}")
+            }
+        } catch (e: ReflectiveOperationException) {
+            if (mcuFailures < MCU_TRIES) DaemonLog.w(TAG, "MCU wake failed: ${e.javaClass.simpleName}")
+        }
+        return true
     }
 
     private fun mcuStatus(): Int? {

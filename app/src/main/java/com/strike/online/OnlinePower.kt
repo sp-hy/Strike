@@ -9,6 +9,7 @@ import com.strike.daemon.PANEL_LOCK_PATH
 import com.strike.daemon.PanelLease
 import com.strike.daemon.ParkedPanel
 import com.strike.daemon.ParkedRails
+import com.strike.vehicle.VehicleCache
 import java.io.File
 
 internal class OnlinePower(private val context: Context) {
@@ -19,6 +20,7 @@ internal class OnlinePower(private val context: Context) {
     private val camera = DaemonClient()
     private var wakePending = false
     private var wakeFailed = false
+    private var lowBattery = false
 
     @Synchronized
     fun hold(wanted: Boolean, parked: Boolean, stillWanted: () -> Boolean): Boolean {
@@ -46,7 +48,12 @@ internal class OnlinePower(private val context: Context) {
         }
         cpu?.let { if (!it.isHeld) it.acquire() }
         wifi?.let { if (!it.isHeld) it.acquire() }
-        if (parked) {
+        val low = parked && VehicleCache.read()?.lowBattery == true
+        if (low != lowBattery) {
+            if (low) DaemonLog.w("Online", "12 V battery is low; releasing parked power")
+            lowBattery = low
+        }
+        if (parked && !low) {
             val wasHeld = ParkedRails.isHeld
             ParkedRails.hold(camera = false, stillWanted = stillWanted)
             if (!ParkedRails.isHeld) return false

@@ -16,6 +16,8 @@ import com.strike.camera.LiveQuality
 import com.strike.camera.SHARK_FRAME
 import com.strike.camera.cameraStack
 import com.strike.camera.sharkCams
+import com.strike.cloud.CIPHER_TABLES
+import com.strike.cloud.CloudHeartbeat
 import com.strike.core.Config
 import com.strike.core.ScratchPaths
 import com.strike.recording.ClipStore
@@ -47,7 +49,9 @@ import com.strike.vehicle.VehicleTelemetry
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.zip.ZipFile
 import kotlin.system.exitProcess
 
 private const val TAG = "Daemon"
@@ -93,6 +97,12 @@ object CameraDaemon {
 
     @Volatile
     private var sentryReason = "Starting vehicle monitoring"
+
+    @Volatile
+    private var lowBattery = false
+
+    private val extras = ParkedExtras()
+    private val cloud = CloudHeartbeat(tables = ::cipherTables, log = { DaemonLog.d("Cloud", it) })
 
     private var vehicle: VehicleTelemetry? = null
     private val acc = AccMonitor(read = {
@@ -175,6 +185,7 @@ object CameraDaemon {
     private fun answer(command: JSONObject): JSONObject = when (command.optString("cmd")) {
         "status" -> status()
         "vehicle" -> {
+            lowBattery = command.optBoolean("lowBattery", false)
             acc.fromApp(VehicleSnapshot(
                 null, null, null, null, null,
                 if (command.has("gear")) command.optString("gear") else null,
@@ -240,6 +251,8 @@ object CameraDaemon {
         payload.put("events", watching?.events ?: 0)
         payload.put("deterrent", screen.isShowing)
         payload.put("rails", ParkedRails.isHeld)
+        payload.put("lowBattery", lowBattery)
+        payload.put("cloud", cloud.status())
         payload.put("live", streamer.isStreaming)
         payload.put("liveView", streamer.view.id)
         payload.put("uptimeMs", System.currentTimeMillis() - startedAtMs)
@@ -270,19 +283,21 @@ object CameraDaemon {
                 panelReady = true
             }
             val now = System.currentTimeMillis()
-            if (sentryMode != SentryMode.OFF) {
+            val awake = awakeWanted()
+            if (sentryMode != SentryMode.OFF || awake) {
                 if (!ParkedRails.isHeld) {
-                    ParkedRails.hold { sentryMode != SentryMode.OFF }
+                    ParkedRails.hold { sentryMode != SentryMode.OFF || awakeWanted() }
                     if (ParkedRails.isHeld) screen.sleepPanel()
                 }
                 if (sentryMode != SentryMode.OFF && !ParkedRails.isHeld) {
                     Thread.sleep(SUPERVISE_EVERY_MS)
                     continue
                 }
-                bringUp(eventsDir() ?: clipsDir())
+                if (sentryMode != SentryMode.OFF) bringUp(eventsDir() ?: clipsDir())
             } else {
                 ParkedRails.release()
             }
+            superviseExtras()
             superviseSentry()
             if (!alive) break
             superviseFlag()
@@ -308,7 +323,7 @@ object CameraDaemon {
             }
             superviseLive()
             superviseFlag()
-            if (sentryMode != SentryMode.OFF && ParkedRails.tick()) {
+            if ((sentryMode != SentryMode.OFF || awake) && ParkedRails.tick(keepAwake = awake)) {
                 if (!screen.isShowing) screen.sleepPanel()
             }
             if (bus != null) {
@@ -330,6 +345,8 @@ object CameraDaemon {
         sentry?.disarm()
         screen.hide()
         ParkedRails.release()
+        extras.release()
+        cloud.want(false)
         stopRecording()
         cameraDown()
         panelReady = false
@@ -375,7 +392,7 @@ object CameraDaemon {
         val enabled = Config.getBool(SurveillanceSettings.ENABLED, false)
         val mode = Config.getString(SurveillanceSettings.MODE, SurveillanceSettings.fallback(SurveillanceSettings.MODE))
         val arm = Config.getString(SurveillanceSettings.ARM, SurveillanceSettings.fallback(SurveillanceSettings.ARM))
-        val next = sentryMode(enabled, mode, snapshot, arm, acc.parkedForMs())
+        val next = if (lowBattery) "off" else sentryMode(enabled, mode, snapshot, arm, acc.parkedForMs())
         if (next != null) {
             sentryMode = when (next) {
                 "smart" -> SentryMode.SMART
@@ -386,10 +403,42 @@ object CameraDaemon {
         if (sentryMode != SentryMode.OFF) wanted = false
         sentry?.screenOn = Config.getBool(SurveillanceSettings.SCREEN, false)
         if (sentryMode == SentryMode.OFF) sentry?.disarm()
-        val reason = surveillanceReason(enabled, snapshot, arm, next, acc.isConfirmingOff())
+        val reason = surveillanceReason(enabled, snapshot, arm, next, acc.isConfirmingOff(), lowBattery)
         if (reason != sentryReason) {
             sentryReason = reason
             DaemonLog.d("Sentry", reason)
+        }
+    }
+
+    private fun awakeWanted(): Boolean {
+        if (lowBattery || !ParkedPower.on(ParkedPower.KEEP_AWAKE)) return false
+        val snapshot = acc.snapshot() ?: return false
+        return snapshot.accOn == false && (snapshot.gear == null || snapshot.gear == "P") && !acc.isConfirmingOff()
+    }
+
+    private fun superviseExtras() {
+        if (ParkedRails.isHeld) {
+            extras.tick(
+                camera = ParkedPower.on(ParkedPower.CAMERA_HEARTBEAT),
+                shutdown = ParkedPower.on(ParkedPower.SHUTDOWN_HOLD),
+                network = ParkedPower.on(ParkedPower.NETWORK)
+            )
+        } else {
+            extras.release()
+            ParkedRails.clearStale()
+        }
+        cloud.want(ParkedRails.isHeld && ParkedPower.on(ParkedPower.CLOUD_HEARTBEAT))
+    }
+
+    private fun cipherTables(): ByteArray? {
+        val apk = screen.apkPath ?: return null
+        return try {
+            ZipFile(apk).use { zip ->
+                zip.getEntry(CIPHER_TABLES)?.let { entry -> zip.getInputStream(entry).use { it.readBytes() } }
+            }
+        } catch (e: IOException) {
+            DaemonLog.w("Cloud", "could not read the BYD cipher tables from the APK")
+            null
         }
     }
 

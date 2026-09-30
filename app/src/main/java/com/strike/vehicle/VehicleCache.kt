@@ -34,6 +34,8 @@ object VehicleCache {
         snapshot.gear?.let { json.put("gear", it) }
         snapshot.accOn?.let { json.put("accOn", it) }
         snapshot.locked?.let { json.put("locked", it) }
+        snapshot.batteryVolts?.let { json.put("batteryVolts", it) }
+        json.put("lowBattery", snapshot.lowBattery)
         json.put("atMs", System.currentTimeMillis())
         val encoded = Base64.encodeToString(json.toString().toByteArray(), Base64.NO_WRAP)
         val ok = shell.check(
@@ -82,7 +84,9 @@ object VehicleCache {
                 fuelRangeKm = json.optIntOrNull("fuelRangeKm"),
                 gear = json.optStringOrNull("gear"),
                 accOn = json.optBooleanOrNull("accOn"),
-                locked = json.optBooleanOrNull("locked")
+                locked = json.optBooleanOrNull("locked"),
+                batteryVolts = json.optDoubleOrNull("batteryVolts"),
+                lowBattery = json.optBoolean("lowBattery", false)
             )
         } catch (e: Exception) {
             null

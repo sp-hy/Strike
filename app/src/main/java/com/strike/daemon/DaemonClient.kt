@@ -28,9 +28,14 @@ class DaemonClient {
 
     fun liveStop(): Boolean = accepted(send("live.stop"))
 
-    fun vehicle(snapshot: VehicleSnapshot?, observed: (VehicleSnapshot?) -> Unit = {}): Boolean {
+    fun vehicle(
+        snapshot: VehicleSnapshot?,
+        lowBattery: Boolean = false,
+        observed: (VehicleSnapshot?) -> Unit = {}
+    ): Boolean {
         val request = JSONObject()
         request.put("cmd", "vehicle")
+        request.put("lowBattery", lowBattery)
         if (snapshot?.accOn != null) request.put("on", snapshot.accOn)
         if (snapshot?.gear != null) request.put("gear", snapshot.gear)
         if (snapshot?.locked != null) request.put("locked", snapshot.locked)
