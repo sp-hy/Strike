@@ -12,14 +12,27 @@ internal fun watchdogScript(
     nativeLibDir: String,
     daemonClass: String
 ): List<String> {
-    // app_process needs the extracted native library and the apk's assets.
-    val launch = "  CLASSPATH=/system/framework/bmmcamera.jar:\$APK_PATH app_process " +
-        "-Djava.library.path=$nativeLibDir:/system/lib64:/vendor/lib64:/product/lib64:/odm/lib64 " +
-        "/system/bin --nice-name=$CAM_PROCESS $daemonClass $nativeLibDir \"\$APK_PATH\" " +
+    // FastCam needs the extracted native libs. A reinstall can move the
+    // app to a new /data/app directory, so the libs are found next to the current apk.
+    val abi = nativeLibDir.trimEnd('/').substringAfterLast('/')
+    val libDir = listOf(
+        "  LIB_DIR=\"\$(dirname \"\$APK_PATH\")/lib/$abi\"",
+        "  if [ ! -d \"\$LIB_DIR\" ]; then LIB_DIR=\"$nativeLibDir\"; fi"
+    )
+    val launch = "  CLASSPATH=\$APK_PATH app_process " +
+        "-Djava.library.path=\$LIB_DIR:/system/lib64:/vendor/lib64:/product/lib64:/odm/lib64 " +
+        "/system/bin --nice-name=$CAM_PROCESS $daemonClass \"\$LIB_DIR\" \"\$APK_PATH\" " +
         ">> \"\$LOG_FILE\" 2>&1 &"
 
+    // Derive scratch from the strike dir so tests can remap STRIKE_DIR alone.
     return listOf(
         "#!/system/bin/sh",
+        "STRIKE_HOME=\"$STRIKE_DIR\"",
+        "SCRATCH_HOME=\$(dirname \"\$STRIKE_HOME\")",
+        "export STRIKE_SCRATCH=\"\$SCRATCH_HOME\"",
+        "export OVERDRIVE_SCRATCH=\"\$SCRATCH_HOME\"",
+        "export TMPDIR=\"\$SCRATCH_HOME\"",
+        "mkdir -p \"\$STRIKE_HOME\" \"\$SCRATCH_HOME\" || true",
         "LOG_FILE=\"$CAM_LOG_PATH\"",
         "LOCK_FILE=\"$CAM_LOCK_PATH\"",
         "SENTINEL=\"$CAM_SENTINEL_PATH\"",
@@ -47,6 +60,7 @@ internal fun watchdogScript(
         "    echo \"\$(date +%s)000 error watchdog \$(cat \"\$SENTINEL\")\" >> \"\$LOG_FILE\"",
         "    exit 1",
         "  fi",
+        *libDir.toTypedArray(),
         "  START=\$(awk '{print int(\$1)}' /proc/uptime 2>/dev/null || date +%s)",
         launch,
         "  DAEMON_PID=\$!",

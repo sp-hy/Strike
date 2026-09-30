@@ -16,10 +16,23 @@ class Storage(context: Context, shell: Shell) {
 
     fun mounted(): Map<String, Volume> = volumes.mounted()
 
-    fun location(): String =
+    /** Configured preference (sd by default on new installs). */
+    fun preferredLocation(): String =
         Config.getString(RecordingSettings.LOCATION, RecordingSettings.fallback(RecordingSettings.LOCATION))
 
-    fun selected(): Volume? = volumes.mounted()[location()]
+    /**
+     * Volume actually used for clips. Prefer the configured location when mounted;
+     * otherwise fall back to internal so recording still works without an SD card.
+     */
+    fun location(): String {
+        val preferred = preferredLocation()
+        val volumes = mounted()
+        if (volumes.containsKey(preferred)) return preferred
+        if (volumes.containsKey(INTERNAL)) return INTERNAL
+        return volumes.keys.firstOrNull() ?: preferred
+    }
+
+    fun selected(): Volume? = mounted()[location()]
 
     fun clipsOn(volume: Volume): ClipStore = ClipStore(clipsDir(volume))
 
@@ -31,7 +44,11 @@ class Storage(context: Context, shell: Shell) {
     // The app resolves the volume and publishes its path for the daemon.
     fun publish(shell: Shell) {
         forgetMounted()
-        val root = volumes.rootFor(location()) ?: return
+        val active = location()
+        val root = volumes.rootFor(active) ?: run {
+            Logs.w(TAG, "no volume for $active (preferred ${preferredLocation()})")
+            return
+        }
         publishWriteDir(shell, File(publicRoot(root.path), CLIPS_DIR), RecordingSettings.CLIPS_DIR)
     }
 
@@ -51,8 +68,8 @@ internal fun publicRoot(path: String): String {
     return if (marker > 0) path.substring(0, marker) else path
 }
 
-// Probe writes from the app UID; chmod is ineffective on FUSE.
-// Preserve the selected removable path while the daemon waits for a remount.
+// Probe from the app UID first; on Shark FUSE the app may not write an older
+// Strike/clips tree, so fall back to a shell probe (daemon records as uid 2000).
 internal fun publishWriteDir(shell: Shell, wanted: File, key: String) {
     val ready = prepareDir(wanted, shell)
     val path = keepWritePath(ready, wanted.absolutePath) ?: run {
@@ -61,11 +78,16 @@ internal fun publishWriteDir(shell: Shell, wanted: File, key: String) {
     }
     if (!ready) Logs.w(TAG, "${wanted.path} will not take files yet")
     if (Config.getString(key, "") == path) return
-    Config.put(shell, key, path)
+    if (!Config.put(shell, key, path)) {
+        Logs.w(TAG, "could not publish $key=$path")
+    } else {
+        Logs.d(TAG, "published $key=$path")
+    }
 }
 
 internal fun keepWritePath(ready: Boolean, path: String): String? {
     if (ready) return path
+    // Removable card: keep the path while FUSE remounts.
     if (storageUuid(path) != null) return path
     return null
 }
@@ -75,15 +97,23 @@ internal fun prepareDir(dir: File, shell: Shell?): Boolean {
     if (!dir.exists() && !dir.mkdirs()) {
         shell?.check("timeout -s KILL 3 mkdir -p \"${dir.absolutePath}\"")
     }
+    if (!dir.exists() && shell != null) {
+        shell.check("timeout -s KILL 3 mkdir -p \"${dir.absolutePath}\"")
+    }
     if (!dir.exists()) return false
     openForDaemon(dir)
     val probe = File(dir, ".probe")
-    return try {
+    try {
         probe.writeText("ok")
         probe.delete()
-        true
-    } catch (e: IOException) {
-        false
+        return true
+    } catch (_: IOException) {
+        // App UID cannot write (stale ownership / FUSE). Shell records here instead.
+        val quoted = dir.absolutePath.replace("'", "'\"'\"'")
+        return shell?.check(
+            "timeout -s KILL 5 sh -c 'mkdir -p \"$quoted\" && " +
+                "echo ok > \"$quoted/.probe\" && rm -f \"$quoted/.probe\"'"
+        ) == true
     }
 }
 

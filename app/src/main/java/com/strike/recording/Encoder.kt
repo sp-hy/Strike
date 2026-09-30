@@ -4,7 +4,6 @@ import android.media.MediaCodec
 import android.media.MediaCodecInfo
 import android.media.MediaCodecList
 import android.media.MediaFormat
-import android.os.Build
 import android.os.Bundle
 import android.view.Surface
 import com.strike.daemon.DaemonLog
@@ -100,7 +99,7 @@ class Encoder(
                 else MediaCodec.createByCodecName(name)
             label = fresh.name
             attempted.add(label)
-            if (Build.VERSION.SDK_INT >= 29) attempted.add(fresh.canonicalName)
+            attempted.add(fresh.canonicalName)
             if (!encodable(fresh)) {
                 failures.add("$label does not support ${width}x$height")
                 return null
@@ -142,12 +141,8 @@ class Encoder(
             return@sequence
         }
         for (candidate in available) {
-            if (!candidate.isEncoder) continue
-            val hardware = if (Build.VERSION.SDK_INT >= 29) candidate.isHardwareAccelerated
-                else legacyHardwareEncoder(candidate.name)
-            if (!hardware) continue
-            val name = if (Build.VERSION.SDK_INT >= 29) candidate.canonicalName else candidate.name
-            if (!attempted.add(name)) continue
+            if (!candidate.isEncoder || !candidate.isHardwareAccelerated) continue
+            if (!attempted.add(candidate.canonicalName)) continue
             val supported = try {
                 candidate.getCapabilitiesForType(mimeType).isFormatSupported(wanted)
             } catch (e: IllegalArgumentException) {
@@ -215,7 +210,7 @@ class Encoder(
                 val index = try {
                     codec.dequeueOutputBuffer(info, DEQUEUE_TIMEOUT_US)
                 } catch (e: IllegalStateException) {
-                    DaemonLog.e(TAG, "encoder stopped answering")
+                    DaemonLog.e(TAG, "encoder stopped answering: ${e.message}")
                     return
                 }
                 if (index == MediaCodec.INFO_OUTPUT_FORMAT_CHANGED) {
@@ -290,16 +285,6 @@ internal fun <T : Any> firstEncoder(
     preferred()?.let { return it }
     for (name in alternatives()) start(name)?.let { return it }
     return null
-}
-
-// Android 9 has no hardware-acceleration flag; software components must be excluded by name.
-internal fun legacyHardwareEncoder(name: String): Boolean {
-    val lower = name.lowercase(java.util.Locale.ROOT)
-    return (lower.startsWith("omx.") || lower.startsWith("c2.")) &&
-        !lower.startsWith("omx.google.") && !lower.startsWith("c2.android.") &&
-        !lower.startsWith("c2.google.") && !lower.startsWith("omx.ffmpeg.") &&
-        !lower.contains(".sw.") && !lower.contains(".sw_") && !lower.endsWith(".sw") &&
-        !lower.startsWith("omx.sec.")
 }
 
 /** H.264 Table A-1, MaxFS in macroblocks against the level that allows it. */

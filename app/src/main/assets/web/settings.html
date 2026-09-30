@@ -13,7 +13,10 @@
 <body>
 
     <header class="topbar">
-        <img class="topbar__brand" src="img/wordmark.webp" alt="Strike" width="144" height="20">
+        <div class="topbar__mark">
+            <img class="topbar__brand" src="img/wordmark.webp" alt="Strike" width="144" height="20">
+            <span class="topbar__edition">shark-beta</span>
+        </div>
         <nav class="nav">
             <a class="nav__link" href="/">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Dashboard
@@ -42,7 +45,7 @@
     <main class="page">
         <div class="hero">
             <h1 class="hero__title">Settings</h1>
-            <p class="hero__sub">Updates, cameras, and the screen PIN.</p>
+            <p class="hero__sub">Updates, the screen PIN, and diagnostics.</p>
         </div>
         <div class="columns">
             <section class="card columns__wide" id="updates">
@@ -88,18 +91,16 @@
                         </span>
                     </div>
                 </section>
-                <section class="card camera-profile" id="cameraSettings">
-                    <div class="card__lead">
-                        <h2 class="card__name" id="cameraProfileLabel">Camera profile</h2>
-                        <p class="note" id="cameraProfileNote">Restart Recorder in Daemons after changing the profile.</p>
+                <section class="card" id="diagnosticsCard">
+                    <div class="card__actions">
+                        <div class="card__lead">
+                            <h2 class="card__name" id="perfLogsLabel">Performance logging</h2>
+                            <p class="note">Write camera frame rates and timings to the recorder log every 10 seconds.</p>
+                        </div>
+                        <span class="card__tools">
+                            <button class="switch" id="perfLogs" type="button" aria-pressed="false" aria-labelledby="perfLogsLabel" disabled><span class="switch__knob"></span></button>
+                        </span>
                     </div>
-                    <span class="pick" id="cameraProfile">
-                        <button class="pick__btn" type="button" aria-expanded="false" aria-labelledby="cameraProfileLabel cameraProfileValue" disabled>
-                            <span id="cameraProfileValue"><span class="sk sk--line"></span></span>
-                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 9l6 6 6-6"/></svg>
-                        </button>
-                        <div class="pick__menu" hidden></div>
-                    </span>
                 </section>
             </div>
         </div>
@@ -137,6 +138,6 @@
     <script src="js/security.js"></script>
     <script src="js/release-notes.js"></script>
     <script src="js/updates.js"></script>
-    <script src="js/camera-settings.js"></script>
+    <script src="js/diagnostics.js"></script>
 </body>
 </html>

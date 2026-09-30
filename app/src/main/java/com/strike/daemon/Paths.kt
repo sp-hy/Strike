@@ -1,15 +1,32 @@
 package com.strike.daemon
 
-// Shared paths are shell-owned and app-readable; the app cannot write /data/local/tmp.
-const val STRIKE_DIR = "/data/local/tmp/strike"
+import com.strike.core.ScratchPaths
 
-const val CONFIG_PATH = "$STRIKE_DIR/config.json"
-const val CAM_LOG_PATH = "$STRIKE_DIR/cam.log"
-const val CAM_LOCK_PATH = "$STRIKE_DIR/cam.lock"
-const val CAM_SENTINEL_PATH = "$STRIKE_DIR/cam.disabled"
-const val CAM_SCRIPT_PATH = "$STRIKE_DIR/start_cam.sh"
-const val CAM_WATCHDOG_PID_PATH = "$STRIKE_DIR/cam_watchdog.pid"
-internal const val PANEL_LOCK_PATH = "$STRIKE_DIR/parked-panel.lock"
+// Shared paths are shell-owned and app-readable under the resolved scratch dir.
+// Use string joins so Windows JVMs do not rewrite Unix head-unit paths.
+val STRIKE_DIR: String
+    get() = ScratchPaths.getDir().trimEnd('/') + "/strike"
+
+val CONFIG_PATH: String
+    get() = "$STRIKE_DIR/config.json"
+
+val CAM_LOG_PATH: String
+    get() = "$STRIKE_DIR/cam.log"
+
+val CAM_LOCK_PATH: String
+    get() = "$STRIKE_DIR/cam.lock"
+
+val CAM_SENTINEL_PATH: String
+    get() = "$STRIKE_DIR/cam.disabled"
+
+val CAM_SCRIPT_PATH: String
+    get() = "$STRIKE_DIR/start_cam.sh"
+
+val CAM_WATCHDOG_PID_PATH: String
+    get() = "$STRIKE_DIR/cam_watchdog.pid"
+
+internal val PANEL_LOCK_PATH: String
+    get() = "$STRIKE_DIR/parked-panel.lock"
 
 /** Overdrive holds 19876 on this same head unit and both may be installed. */
 const val COMMAND_PORT = 19886

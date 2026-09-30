@@ -28,8 +28,8 @@
             </div>
             <div class="modal__body">
                 <p class="note">On a computer with an authorised ADB connection to the head unit, run:</p>
-                <code class="lock__command">adb shell touch /data/local/tmp/.strike_pin_reset</code>
-                <p class="note">Reopen or refresh Strike, then set a new PIN in Settings. Recordings and settings are kept.</p>
+                <code class="lock__command">adb shell touch /sdcard/Android/data/com.strike/files/daemon/.strike_pin_reset</code>
+                <p class="note">If that path is missing, open Strike once first so scratch is created. Reopen or refresh Strike, then set a new PIN in Settings. Recordings and settings are kept.</p>
             </div>
         </section>
     </div>

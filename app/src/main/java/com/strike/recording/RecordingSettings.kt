@@ -13,21 +13,24 @@ object RecordingSettings {
     const val LOCATION = "storage.location"
     const val BUDGET_MB = "storage.budgetMb"
 
+    /** Persisted recorder switch; missing key means autostart on (new installs). */
+    const val RECORDER_ENABLED = "daemons.recorder.enabled"
+
     /** Written by the app, read by the daemon, never shown or set by hand. */
     const val CLIPS_DIR = "storage.clipsDir"
-    const val BUDGET_FALLBACK_MB = 500
+    const val BUDGET_FALLBACK_MB = 20_480
     const val BUDGET_FLOOR_MB = 100
 
     /** Left free on the volume so the car's own storage never runs to zero. */
     const val BUDGET_HEADROOM_MB = 256
 
     val choices = linkedMapOf(
-        MODE to Choice(listOf("off", "continuous", "driving"), "off"),
+        MODE to Choice(listOf("off", "continuous", "driving"), "continuous"),
         CLIP_LENGTH_MINUTES to Choice(listOf("2", "5", "10"), "2"),
         QUALITY to Choice(listOf("economy", "standard", "high", "premium", "max"), "standard"),
         CODEC to Choice(listOf("h264", "h265"), "h264"),
         FRAME_RATE_FPS to Choice(listOf("10", "15", "20", "25", "30"), "15"),
-        LOCATION to Choice(listOf("internal", "sd", "usb"), "internal")
+        LOCATION to Choice(listOf("internal", "sd", "usb"), "sd")
     )
 
     fun fallback(key: String): String = choices.getValue(key).fallback

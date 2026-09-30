@@ -33,6 +33,7 @@ internal class DashboardRuntime(context: Context, shell: Shell, vehicle: Vehicle
 
     fun start(background: Boolean = true) {
         check(http.start()) { "The dashboard port is occupied" }
+        daemons.ensureRecorderAutostart()
         if (background) {
             online.restore()
             updates.resume()

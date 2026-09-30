@@ -26,15 +26,17 @@ object Config {
 
     fun getBool(key: String, fallback: Boolean): Boolean = values().optBoolean(key, fallback)
 
-    /** False when there is no shell, since only uid 2000 can write the file. */
+    /** Prefer a shell write; if ADB is down, write a world-readable file the daemon can still open. */
     fun put(shell: Shell, key: String, value: Any): Boolean = synchronized(lock) {
         val merged = JSONObject(values().toString())
         merged.put(key, value)
         val encoded = Base64.encodeToString(merged.toString().toByteArray(), Base64.NO_WRAP)
-        if (shell.run(writeLine(encoded)) != 0) return false
-        readAtMs = 0L
-        modifiedAtMs = -1L
-        true
+        if (shell.run(writeLine(encoded)) == 0) {
+            readAtMs = 0L
+            modifiedAtMs = -1L
+            return true
+        }
+        return writeLocal(merged)
     }
 
     private fun values(): JSONObject = synchronized(lock) {
@@ -52,16 +54,46 @@ object Config {
     private fun read(file: File): JSONObject = try {
         if (file.isFile) JSONObject(file.readText()) else JSONObject()
     } catch (e: JSONException) {
-        Logs.w(TAG, "the settings file is not readable json")
+        Logs.w(TAG, "the settings file is not readable json; rewriting on next save")
         JSONObject()
     } catch (e: IOException) {
         Logs.w(TAG, "cannot read the settings file")
         JSONObject()
     }
+
+    private fun writeLocal(merged: JSONObject): Boolean {
+        val file = File(CONFIG_PATH)
+        return try {
+            file.parentFile?.mkdirs()
+            val tmp = File(file.parentFile, "config.json.tmp")
+            tmp.writeText(merged.toString())
+            tmp.setReadable(true, false)
+            tmp.setWritable(true, false)
+            if (!tmp.renameTo(file)) {
+                file.writeText(merged.toString())
+                tmp.delete()
+            }
+            file.setReadable(true, false)
+            file.setWritable(true, false)
+            readAtMs = 0L
+            modifiedAtMs = -1L
+            Logs.w(TAG, "wrote settings without shell")
+            true
+        } catch (e: IOException) {
+            Logs.w(TAG, "cannot write the settings file")
+            false
+        }
+    }
 }
 
 // Base64 protects shell arguments; atomic rename prevents partial reads.
-internal fun writeLine(base64: String): String =
-    "mkdir -p $STRIKE_DIR && chmod 755 $STRIKE_DIR && " +
-        "echo $base64 | base64 -d > $CONFIG_PATH.tmp && chmod 644 $CONFIG_PATH.tmp && " +
-        "mv -f $CONFIG_PATH.tmp $CONFIG_PATH"
+internal fun writeLine(base64: String): String {
+    val dir = STRIKE_DIR
+    val path = CONFIG_PATH
+    // Quote the payload — unquoted +/= in base64 breaks toybox echo.
+    return ScratchPaths.prepareShellCommand(
+        "mkdir -p '$dir' && chmod 777 '$dir' && " +
+            "echo '$base64' | base64 -d > '$path.tmp' && chmod 644 '$path.tmp' && " +
+            "mv -f '$path.tmp' '$path'"
+    )
+}

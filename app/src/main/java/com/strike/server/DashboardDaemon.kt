@@ -38,6 +38,8 @@ object DashboardDaemon {
         Looper.prepareMainLooper()
         val base = checkNotNull(DaemonContext.get()) { "Shell context unavailable" }
         val installed = base.createPackageContext("com.strike", Context.CONTEXT_IGNORE_SECURITY)
+        com.strike.core.ScratchPaths.init(installed)
+        com.strike.core.ScratchPaths.syncFromEnv()
         val uid = installed.applicationInfo.uid
         val directory = File(args.single())
         if (directory.path != dashboardDirectory(installed)) exitProcess(0)
@@ -46,7 +48,7 @@ object DashboardDaemon {
         val lease = lock.tryLock() ?: exitProcess(3)
         val server = try { LocalServerSocket(DASHBOARD_SOCKET) } catch (e: IOException) { exitProcess(3) }
         val context = DashboardContext(base, installed, directory)
-        val host = DashboardHost(context, uid, VehicleTelemetry(base))
+        val host = DashboardHost(context, uid, VehicleTelemetry(installed))
         host.restore()
         Runtime.getRuntime().addShutdownHook(Thread({
             try {

@@ -6,6 +6,7 @@ import com.strike.daemon.DaemonClient
 import com.strike.daemon.Shell
 import com.strike.surveillance.EventStorage
 import com.strike.surveillance.LOCK_FALLBACK_MS
+import com.strike.vehicle.VehicleCache
 import com.strike.vehicle.VehicleSnapshot
 import com.strike.vehicle.VehicleTelemetry
 
@@ -32,13 +33,29 @@ class Triggers(
 
     private fun watch() {
         while (true) {
+            // Full energy snapshot for the dashboard (shell cannot call BYD IPC).
+            val energy = vehicle.snapshot()
             val snapshot = vehicle.parkingSnapshot()
+            VehicleCache.write(
+                shell,
+                VehicleSnapshot(
+                    soc = energy?.soc,
+                    rangeKm = energy?.rangeKm,
+                    batteryKwh = energy?.batteryKwh,
+                    fuelPercent = energy?.fuelPercent,
+                    fuelRangeKm = energy?.fuelRangeKm,
+                    gear = energy?.gear ?: snapshot.gear,
+                    accOn = energy?.accOn ?: snapshot.accOn,
+                    locked = energy?.locked ?: snapshot.locked
+                )
+            )
             val connected = daemon.vehicle(snapshot, onVehicle)
             superviseAudio(connected && shouldRecord(mode(), snapshot), snapshot)
+            // Always publish so the daemon has a clip path (SD → internal fallback).
+            clips.publish(shell)
             if (snapshot.accOn != true) {
                 if (snapshot.accOn == false) remountCards()
                 events.publish(shell)
-                clips.publish(shell)
             }
             Thread.sleep(EVERY_MS)
         }

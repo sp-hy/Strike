@@ -7,8 +7,8 @@ import org.junit.Test
 class VehicleSignalsTest {
 
     @Test
-    fun socRejectsTheUnpopulatedZero() {
-        assertNull(socOf(0.0))
+    fun socKeepsZeroAndRejectsOutOfRange() {
+        assertEquals(0, socOf(0.0))
         assertNull(socOf(null))
         assertNull(socOf(101.0))
         assertEquals(46, socOf(45.6))
@@ -78,7 +78,7 @@ class VehicleSignalsTest {
     }
 
     @Test
-    fun nonFiniteEnergyNeverReachesTheDisplayWithoutSoc() {
+    fun nonFiniteEnergyNeverReachesTheDisplay() {
         for (direct in listOf(Double.NaN, Double.POSITIVE_INFINITY, Double.NEGATIVE_INFINITY)) {
             assertNull(batteryKwhOf(direct, null) { null })
             assertNull(batteryKwhOf(direct, 3) { null })
@@ -86,12 +86,9 @@ class VehicleSignalsTest {
     }
 
     @Test
-    fun largerPackReadingsNeedEnoughSocToValidate() {
-        assertEquals(108.0, batteryKwhOf(108.0, 90) { error("Valid 120 kWh pack") }!!, 0.001)
+    fun openDiKeyUsableBandCapsAt100Kwh() {
         assertEquals(99.0, batteryKwhOf(null, 90) { 990 }!!, 0.001)
-        assertNull(batteryKwhOf(108.0, null) { null })
-        assertNull(batteryKwhOf(108.0, 3) { null })
-        assertNull(batteryKwhOf(108.0, 50) { null })
+        assertNull(batteryKwhOf(108.0, 90) { null })
         assertNull(batteryKwhOf(120.0, 100) { null })
     }
 
@@ -111,13 +108,8 @@ class VehicleSignalsTest {
     }
 
     @Test
-    fun anUnverifiedHalfScaleHybridReadingDoesNotHideAValidFallback() {
-        assertEquals(16.5, batteryKwhOf(8.25, 77) { 165 }!!, 0.001)
-        assertNull(batteryKwhOf(9.1, 100) { 91 })
-    }
-
-    @Test
-    fun fullScaleHybridReadingsAreNeverDoubled() {
+    fun openDiKeyKeepsPlausibleDirectUsableKwh() {
+        assertEquals(8.25, batteryKwhOf(8.25, 77) { 165 }!!, 0.001)
         assertEquals(16.5, batteryKwhOf(16.5, 77) { error("Primary is already in kWh") }!!, 0.001)
         assertEquals(16.5, batteryKwhOf(null, 77) { 165 }!!, 0.001)
     }

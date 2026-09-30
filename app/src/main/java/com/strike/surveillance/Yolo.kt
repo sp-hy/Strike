@@ -49,7 +49,7 @@ class Yolo(private val apkPath: String?) {
 
     fun open(): Boolean {
         if (interpreter != null) return true
-        // app_process does not pull JNI in on its own, the same as bmmcamera.
+        // app_process does not pull JNI in on its own.
         try {
             System.loadLibrary("tensorflowlite_jni")
         } catch (e: UnsatisfiedLinkError) {

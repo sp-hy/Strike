@@ -3,7 +3,6 @@ package com.strike.camera
 import android.graphics.PixelFormat
 import android.hardware.HardwareBuffer
 import android.media.ImageReader
-import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import com.strike.daemon.DaemonLog
@@ -39,7 +38,8 @@ class FrameSink(private val everyMs: Long) {
             thread = spinner
             warnedRead = false
         }
-        bus.add(Consumer(NAME, fresh.surface, CameraView.ALL, Frame(SINK_WIDTH, SINK_HEIGHT)))
+        val fps = ((1000L + everyMs - 1) / everyMs).toInt()
+        bus.add(Consumer(NAME, fresh.surface, CameraView.ALL, Frame(SINK_WIDTH, SINK_HEIGHT), fps))
         DaemonLog.d(TAG, "reading back ${SINK_WIDTH}x$SINK_HEIGHT every ${everyMs}ms")
     }
 
@@ -102,12 +102,8 @@ class FrameSink(private val everyMs: Long) {
 
     // RGBA buffers permit CPU readback; PRIVATE buffers do not.
     private fun newReader(): ImageReader =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ImageReader.newInstance(
-                SINK_WIDTH, SINK_HEIGHT, PixelFormat.RGBA_8888, POOL,
-                HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or HardwareBuffer.USAGE_CPU_READ_OFTEN
-            )
-        } else {
-            ImageReader.newInstance(SINK_WIDTH, SINK_HEIGHT, PixelFormat.RGBA_8888, POOL)
-        }
+        ImageReader.newInstance(
+            SINK_WIDTH, SINK_HEIGHT, PixelFormat.RGBA_8888, POOL,
+            HardwareBuffer.USAGE_GPU_COLOR_OUTPUT or HardwareBuffer.USAGE_CPU_READ_OFTEN
+        )
 }

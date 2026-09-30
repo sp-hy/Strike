@@ -3,29 +3,21 @@ package com.strike.daemon
 import android.os.Looper
 import android.os.Handler
 import android.os.Process
-import android.os.Build
 import android.os.SystemClock
-import com.strike.camera.CAMERA_PROFILE
 import com.strike.camera.CAMERA_FIRST_FRAME_MS
-import com.strike.camera.CameraChoice
-import com.strike.camera.CameraProfile
-import com.strike.camera.CameraSource
-import com.strike.camera.CameraStartup
+import com.strike.camera.FastCamBackend
+import com.strike.camera.FastCamNative
 import com.strike.camera.CameraView
 import com.strike.camera.FrameBus
 import com.strike.camera.LIVE_BITRATE_BPS
 import com.strike.camera.LIVE_FRAME_RATE_FPS
 import com.strike.camera.LiveStreamer
 import com.strike.camera.LiveQuality
+import com.strike.camera.SHARK_FRAME
 import com.strike.camera.cameraStack
-import com.strike.camera.cameras
-import com.strike.camera.AvcHal
-import com.strike.camera.CameraTexture
-import com.strike.camera.fallbackCamera
-import com.strike.camera.loadCameraLibraries
-import com.strike.camera.roadCamera
+import com.strike.camera.sharkCams
 import com.strike.core.Config
-import com.strike.core.systemProperty
+import com.strike.core.ScratchPaths
 import com.strike.recording.ClipStore
 import com.strike.recording.MB
 import com.strike.recording.Reapable
@@ -64,6 +56,7 @@ private const val REAP_EVERY_MS = 30_000L
 private const val RETRY_AFTER_MS = 10_000L
 
 private const val STALL_MS = 6_000L
+private const val LOST_CAPTURE_MS = 4_000L
 private const val CAMERA_SETTLE_MS = 1_500L
 
 private enum class SentryMode { OFF, SMART, CONTINUOUS }
@@ -103,6 +96,9 @@ object CameraDaemon {
 
     private var vehicle: VehicleTelemetry? = null
     private val acc = AccMonitor(read = {
+        // BYD Auto IPC only works from the app UID (Open-DiKey). Shell uid 2000
+        // always gets SecurityException — rely on Triggers pushing snapshots.
+        if (Process.myUid() == 2000) return@AccMonitor null
         val telemetry = vehicle ?: DaemonContext.get()?.let { context ->
             VehicleTelemetry(context) { DaemonLog.w("ACC", it) }
         }
@@ -113,7 +109,7 @@ object CameraDaemon {
     private val relay = PacketRelay()
     private val audio = AudioIngest()
     private val streamer = LiveStreamer(relay)
-    private val camera = CameraSource()
+    private val camera = FastCamBackend()
     private val panel = ParkedPanel()
     private val panelLease = PanelLease(File(PANEL_LOCK_PATH), camera = true)
     private val screen = RedScreen(panel) {
@@ -129,12 +125,8 @@ object CameraDaemon {
     private var target: Target? = null
     private var flagged: Flag? = null
     private val marked = ArrayList<Mark>()
-    private var inventory: List<CameraChoice>? = null
-    private var cameraProfile = CameraProfile.AUTO
-    private var cameraStartup: CameraStartup? = null
     private var cameraOpenedAtMs = 0L
     private var cameraRetryAtMs = 0L
-    private var camerasReason = ""
     private var failedAtMs = 0L
     private var remountedAtMs = 0L
     private var reapedAtMs = 0L
@@ -145,20 +137,26 @@ object CameraDaemon {
     fun main(args: Array<String>) {
         DaemonLog.watchCrashes()
         DaemonLog.d(TAG, "starting as uid ${Process.myUid()}, pid ${Process.myPid()}")
+        ScratchPaths.syncFromEnv()
+        ScratchPaths.ensureDir()
         // A duplicate daemon must stop its watchdog without clearing the active daemon's lock.
         if (!lock.take()) exitProcess(EXIT_ALREADY_RUNNING)
-        cameraProfile = CameraProfile.of(Config.getString(CAMERA_PROFILE, "auto")) ?: CameraProfile.AUTO
-        DaemonLog.d(TAG, "camera profile: ${cameraProfile.label}")
-        // The camera HAL posts its callbacks to the main looper, as in Overdrive's daemon.
+        DaemonLog.d(TAG, "camera stack: " + cameraStack())
         Looper.prepareMainLooper()
         DaemonFonts.install()
-        loadCameraLibraries()
-        CameraTexture.load(args.firstOrNull())
+        val nativeDir = args.firstOrNull()
+        camera.setNativeLibDir(nativeDir)
+        FastCamNative.tryLoadFrom(nativeDir)
         screen.apkPath = args.getOrNull(1)
         panelReady = panelLease.acquire()
         sentry = Sentry(args.getOrNull(1), screen)
-        vehicle = DaemonContext.get()?.let { context ->
-            VehicleTelemetry(context) { DaemonLog.w("ACC", it) }
+        vehicle = if (Process.myUid() == 2000) {
+            DaemonLog.d(TAG, "skipping local BYD telemetry under shell uid; app Triggers supply ACC")
+            null
+        } else {
+            DaemonContext.get()?.let { context ->
+                VehicleTelemetry(context) { DaemonLog.w("ACC", it) }
+            }
         }
         wanted = shouldRecord(Config.getString(RecordingSettings.MODE, RecordingSettings.fallback(RecordingSettings.MODE)), null)
         // SIGTERM can finalize an open clip; SIGKILL and power loss cannot.
@@ -228,8 +226,7 @@ object CameraDaemon {
         val held = recorder
         val watching = sentry
         val payload = ok()
-        payload.put("cameras", found())
-        if (camerasReason.isNotEmpty()) payload.put("camerasReason", camerasReason)
+        payload.put("cameras", cameras())
         payload.put("recording", held != null && held.isRecording)
         payload.put("clip", held?.clip ?: JSONObject.NULL)
         payload.put("clipMs", if (held?.clip == null) 0 else System.currentTimeMillis() - held.clipStartedAtMs)
@@ -247,11 +244,11 @@ object CameraDaemon {
         payload.put("liveView", streamer.view.id)
         payload.put("uptimeMs", System.currentTimeMillis() - startedAtMs)
         payload.put("frames", bus?.frameCount ?: 0)
-        val strip = bus
-        if (strip != null) {
+        val open = bus
+        if (open != null) {
             val camera = JSONObject()
-            camera.put("width", strip.stripWidth)
-            camera.put("height", strip.stripHeight)
+            camera.put("width", open.frameWidth)
+            camera.put("height", open.frameHeight)
             payload.put("camera", camera)
         }
         return payload
@@ -315,7 +312,7 @@ object CameraDaemon {
                 if (!screen.isShowing) screen.sleepPanel()
             }
             if (bus != null) {
-                AvcHal.keepAlive(if (sentryMode != SentryMode.OFF) 10_000L else 60_000L)
+                // FastCam capture stays alive while the bus is open.
             }
             if (nothingWatching() && wantedTarget == null && !(liveWanted && relay.hasReader)) {
                 cameraDown()
@@ -406,10 +403,10 @@ object CameraDaemon {
             watching.disarm()
             return
         }
-        val strip = bus ?: cameraUp() ?: return
+        val frames = bus ?: cameraUp() ?: return
         synchronized(acc) {
             if (!alive || sentryMode != SentryMode.SMART) return
-            if (watching.isArmed) watching.rebind(strip) else watching.arm(strip)
+            if (watching.isArmed) watching.rebind(frames) else watching.arm(frames)
         }
     }
 
@@ -455,18 +452,14 @@ object CameraDaemon {
         if (!alive) return null
         bus?.let { return it }
         if (SystemClock.elapsedRealtime() < cameraRetryAtMs) return null
-        inventoryNow()
-        val strip = cameraStartup?.choice ?: return null
         cameraRetryAtMs = SystemClock.elapsedRealtime() + RETRY_AFTER_MS
-        AvcHal.warmAndWait()
         if (!alive) return null
-        val fresh = FrameBus(strip.width, strip.height)
-        val input = fresh.start()
-        if (input == null) {
-            fresh.stop()
+        if (!camera.open(frameRateFps())) {
             return null
         }
-        if (!camera.open(strip, frameRateFps(), input)) {
+        val fresh = FrameBus(SHARK_FRAME.width, SHARK_FRAME.height)
+        if (!fresh.start()) {
+            camera.close()
             fresh.stop()
             return null
         }
@@ -478,7 +471,7 @@ object CameraDaemon {
         bus = fresh
         cameraOpenedAtMs = SystemClock.elapsedRealtime()
         cameraRetryAtMs = 0L
-        DaemonLog.d(TAG, "camera ${strip.id} open, strip ${strip.width}x${strip.height}")
+        DaemonLog.d(TAG, "FastCam open, frame ${SHARK_FRAME.width}x${SHARK_FRAME.height} cams=${sharkCams()}")
         return fresh
     }
 
@@ -493,18 +486,21 @@ object CameraDaemon {
     // Recover stalled parked capture without disarming surveillance.
     private fun superviseFrames() {
         val watched = bus ?: return
-        val startup = cameraStartup ?: return
         val frames = watched.frameCount
-        val previous = startup.choice
         val waitingMs = SystemClock.elapsedRealtime() - cameraOpenedAtMs
-        val changed = startup.observe(frames, waitingMs)
         val quiet = if (frames == 0L) waitingMs else watched.quietForMs
-        val allowed = if (frames == 0L) CAMERA_FIRST_FRAME_MS else STALL_MS
+        // A capture child that exited (AIS busy or preempted) will never send a first frame.
+        val lost = !camera.isOpen
+        val allowed = when {
+            lost -> LOST_CAPTURE_MS
+            frames == 0L -> CAMERA_FIRST_FRAME_MS
+            else -> STALL_MS
+        }
         if (quiet < allowed) return
-        if (changed) {
-            DaemonLog.w(TAG, "camera ${previous.id} sent no frames in ${quiet / 1000}s; trying raw camera 0")
+        if (lost) {
+            DaemonLog.w(TAG, "FastCam capture exited; reopening it")
         } else if (frames == 0L) {
-            DaemonLog.e(TAG, "camera ${startup.choice.id} sent no frames in ${quiet / 1000}s; reopening it")
+            DaemonLog.e(TAG, "FastCam sent no frames in ${quiet / 1000}s; reopening it")
         } else {
             DaemonLog.w(TAG, "the camera went quiet for ${quiet / 1000}s, reopening it")
         }
@@ -516,12 +512,8 @@ object CameraDaemon {
         watched.stop()
         bus = null
         if (sentryMode != SentryMode.OFF) ParkedRails.reassert()
-        if (changed) {
-            cameraRetryAtMs = SystemClock.elapsedRealtime() + CAMERA_SETTLE_MS
-            return
-        }
-        val strip = cameraUp() ?: return
-        sentry?.rebind(strip)
+        cameraRetryAtMs = SystemClock.elapsedRealtime() + CAMERA_SETTLE_MS
+        sentry?.rebind(cameraUp() ?: return)
     }
 
     private fun targetNow(): Target? {
@@ -635,51 +627,12 @@ object CameraDaemon {
         if (dropped > 0) DaemonLog.d(TAG, "dropped $dropped oldest $what to stay under $budgetMb MB")
     }
 
-    // Cache camera discovery across status requests; repeated HAL probes can wedge capture.
-    @Synchronized
-    private fun inventoryNow(): List<CameraChoice> {
-        var known = inventory
-        if (known == null) {
-            val probed = cameras(cameraProfile)
-            if (probed.cameras.isEmpty()) {
-                DaemonLog.w(TAG, "no named camera: ${probed.reason}")
-                DaemonLog.d(TAG, "camera stack: " + cameraStack())
-            }
-            known = probed.cameras.ifEmpty {
-                val model = systemProperty("ro.product.model")
-                DaemonLog.d(TAG, "camera model: ${model ?: "unavailable"}")
-                listOf(fallbackCamera(model))
-            }
-            inventory = known
-            roadCamera(known)?.let {
-                cameraStartup = CameraStartup(
-                    it, cameraProfile == CameraProfile.AUTO,
-                    File("$STRIKE_DIR/camera.raw"), Build.FINGERPRINT
-                )
-            }
-            camerasReason = if (roadCamera(known) == null) "No supported road camera was found" else ""
-            if (camerasReason.isNotEmpty()) DaemonLog.e(TAG, camerasReason)
-            val label = if (probed.cameras.isEmpty()) "fallback camera (assumed size)" else "cameras"
-            DaemonLog.d(TAG, "$label: " + known.joinToString(", ") { "${it.tag} id=${it.id} ${it.width}x${it.height}" })
-        }
-        return known
-    }
-
-    private fun found(): JSONArray {
-        val list = JSONArray()
-        val known = inventoryNow()
-        val selected = cameraStartup?.choice
-        val reported = if (selected != null && selected !in known) listOf(selected) else known
-        for (camera in reported) {
-            val row = JSONObject()
-            row.put("id", camera.id)
-            row.put("tag", camera.tag)
-            row.put("width", camera.width)
-            row.put("height", camera.height)
-            list.put(row)
-        }
-        return list
-    }
+    private fun cameras(): JSONArray = JSONArray().put(
+        JSONObject()
+            .put("tag", "fastcam")
+            .put("width", SHARK_FRAME.width)
+            .put("height", SHARK_FRAME.height)
+    )
 
     private fun clipsDir(): File? = dir(RecordingSettings.CLIPS_DIR)
 

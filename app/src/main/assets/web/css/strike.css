@@ -48,6 +48,23 @@ body {
     flex: none;
 }
 
+.topbar__mark {
+    display: flex;
+    align-items: center;
+    flex: none;
+    gap: 0.55rem;
+}
+
+.topbar__edition {
+    font-size: 0.72rem;
+    font-weight: 500;
+    letter-spacing: 0.06em;
+    text-transform: lowercase;
+    color: var(--text);
+    opacity: 0.48;
+    white-space: nowrap;
+}
+
 .online__panel {
     display: flex;
     align-items: center;
@@ -432,17 +449,6 @@ main {
 
 .columns__narrow > .card + .card {
     margin-top: var(--gap);
-}
-
-.camera-profile {
-    display: flex;
-    align-items: center;
-}
-
-.camera-profile > .card__lead {
-    flex: 1;
-    min-width: 0;
-    margin-right: var(--gap);
 }
 
 .card__title {

@@ -78,7 +78,7 @@ class Shell internal constructor(
             Files.copy(file.toPath(), File(path).toPath(), StandardCopyOption.REPLACE_EXISTING)
             true
         } catch (e: IOException) {
-            Logs.w(TAG, "Could not transfer the update to the installer")
+            Logs.w(TAG, "Could not copy ${file.name} to $path")
             false
         }
         val connection = connect() ?: return false
@@ -86,7 +86,7 @@ class Shell internal constructor(
             connection.push(file, path)
             true
         } catch (e: IOException) {
-            Logs.w(TAG, "Could not transfer the update to the installer")
+            Logs.w(TAG, "Could not push ${file.name} to $path")
             drop(connection)
             false
         }

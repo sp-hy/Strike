@@ -242,11 +242,7 @@ class RedScreen(
         builder.getMethod("setName", String::class.java).invoke(made, LAYER)
         builder.getMethod("setBufferSize", Int::class.java, Int::class.java)
             .invoke(made, width, height)
-        try {
-            builder.getMethod("setOpaque", Boolean::class.java).invoke(made, true)
-        } catch (e: NoSuchMethodException) {
-            // Older firmware has no setter; the buffer is still opaque.
-        }
+        builder.getMethod("setOpaque", Boolean::class.java).invoke(made, true)
         builder.getMethod("build").invoke(made)
     } catch (e: ReflectiveOperationException) {
         DaemonLog.e(TAG, "this firmware will not give Strike a layer: ${e.message}")
@@ -271,16 +267,12 @@ class RedScreen(
                 transactionClass.getMethod("setLayerStack", controlClass, Int::class.java)
                     .invoke(transaction, held, 0)
             } catch (e: NoSuchMethodException) {
-                // Older firmware parents the layer to the default display.
+                // Hidden API; without it the layer stays on the default display.
             }
             transactionClass.getMethod("setLayer", controlClass, Int::class.java)
                 .invoke(transaction, held, Integer.MAX_VALUE)
-            try {
-                transactionClass.getMethod("setAlpha", controlClass, Float::class.java)
-                    .invoke(transaction, held, 1f)
-            } catch (e: NoSuchMethodException) {
-                // The layer still shows; alpha stays at the builder default.
-            }
+            transactionClass.getMethod("setAlpha", controlClass, Float::class.java)
+                .invoke(transaction, held, 1f)
             transactionClass.getMethod("show", controlClass).invoke(transaction, held)
         }
     }
@@ -289,12 +281,8 @@ class RedScreen(
     private fun releaseLayer(held: Any) {
         transact { transaction, controlClass, transactionClass ->
             transactionClass.getMethod("hide", controlClass).invoke(transaction, held)
-            try {
-                transactionClass.getMethod("reparent", controlClass, controlClass)
-                    .invoke(transaction, held, null)
-            } catch (e: NoSuchMethodException) {
-                // Older firmware drops the layer on release alone.
-            }
+            transactionClass.getMethod("reparent", controlClass, controlClass)
+                .invoke(transaction, held, null)
         }
         try {
             Class.forName("android.view.SurfaceControl").getMethod("release").invoke(held)

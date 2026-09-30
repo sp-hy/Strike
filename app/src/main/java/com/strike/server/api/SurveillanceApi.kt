@@ -102,6 +102,7 @@ class SurveillanceApi(context: Context, private val shell: Shell) {
     fun settings(): Response {
         val payload = JSONObject()
         payload.put("values", values())
+        payload.put("activeLocation", events.location())
         payload.put("volumes", volumesPayload())
         return Response(200, JSON, payload.toString().toByteArray())
     }

@@ -9,7 +9,17 @@
     var HEADER_BYTES = 9;
     var TIMESCALE = 90000;
 
-    var FRAME_TICKS = TIMESCALE / 12;
+    // Frame durations come from the encoder's timestamps; this covers the first frame.
+    var FIRST_FRAME_TICKS = TIMESCALE / 15;
+    var MAX_FRAME_TICKS = TIMESCALE;
+
+    // Live means live: drift back toward the newest frame instead of letting delay pile up.
+    var CATCH_UP_S = 0.4;
+    var JUMP_S = 1.5;
+    var JUMP_TO_S = 0.15;
+    var CATCH_UP_RATE = 1.1;
+    var KEEP_S = 10;
+    var STATS_MS = 10000;
 
     // A dropped poll is news about the link, not about the car. Hold the last
     // reading through a dip, then stop claiming it is current.
@@ -35,6 +45,9 @@
     var pending = [];
     var sequence = 1;
     var decodeTime = 0;
+    var lastUs = null;
+    var jumps = 0;
+    var statsAtMs = 0;
     var sps = null;
     var pps = null;
     var drawn = false;
@@ -89,24 +102,9 @@
         paintLabel();
     }
 
-    function panoramic() {
-        for (var i = 0; i < cameras.length; i++) {
-            if (cameras[i].width >= cameras[i].height * 3) {
-                return cameras[i];
-            }
-        }
-        return null;
-    }
-
     function offered() {
-        if (panoramic()) {
-            return { all: true, front: true, right: true, rear: true, left: true };
-        }
-        var can = {};
-        for (var i = 0; i < cameras.length; i++) {
-            can[cameras[i].tag] = true;
-        }
-        return can;
+        if (!cameras.length) return {};
+        return { all: true, front: true, right: true, rear: true, left: true };
     }
 
     function conePoint(r, deg) {
@@ -307,7 +305,11 @@
     }
 
     function drain() {
-        if (!buffer || buffer.updating || !pending.length) {
+        if (!buffer || buffer.updating) {
+            return;
+        }
+        if (!pending.length) {
+            steer();
             return;
         }
         try {
@@ -315,6 +317,42 @@
         } catch (error) {
             reset('The browser refused the video stream', 'Reload the page to try again.');
         }
+    }
+
+    // Runs between appends: keep delay low and the buffer short.
+    function steer() {
+        var video = document.getElementById('video');
+        if (!drawn || !buffer || !video.buffered.length) {
+            return;
+        }
+        var ranges = video.buffered;
+        var end = ranges.end(ranges.length - 1);
+        var lag = end - video.currentTime;
+        if (lag > JUMP_S) {
+            video.currentTime = end - JUMP_TO_S;
+            video.playbackRate = 1;
+            jumps++;
+        } else {
+            var rate = lag > CATCH_UP_S ? CATCH_UP_RATE : 1;
+            if (video.playbackRate !== rate) {
+                video.playbackRate = rate;
+            }
+        }
+        if (video.currentTime - ranges.start(0) > KEEP_S) {
+            buffer.remove(0, video.currentTime - KEEP_S / 2);
+        }
+        stats(video, lag);
+    }
+
+    function stats(video, lag) {
+        var now = Date.now();
+        if (now - statsAtMs < STATS_MS) {
+            return;
+        }
+        statsAtMs = now;
+        var q = video.getVideoPlaybackQuality ? video.getVideoPlaybackQuality() : null;
+        console.info('[live] lag=' + Math.round(lag * 1000) + 'ms rate=' + video.playbackRate +
+            ' jumps=' + jumps + (q ? ' frames=' + q.totalVideoFrames + ' dropped=' + q.droppedVideoFrames : ''));
     }
 
     function openBuffer() {
@@ -360,7 +398,7 @@
         }
     }
 
-    function frame(bytes, keyFrame) {
+    function frame(bytes, keyFrame, timeUs) {
         if (!buffer) {
             config(bytes);
             if (!buffer) {
@@ -378,9 +416,15 @@
         if (!nals.length) {
             return;
         }
-        feed(Strike.fmp4.segment(sequence, decodeTime, FRAME_TICKS, nals, keyFrame));
+        // Each frame lasts as long as the gap since the previous one, so the timeline tracks real time.
+        var ticks = FIRST_FRAME_TICKS;
+        if (lastUs !== null) {
+            ticks = Math.min(MAX_FRAME_TICKS, Math.max(1, Math.round((timeUs - lastUs) * TIMESCALE / 1e6)));
+        }
+        lastUs = timeUs;
+        feed(Strike.fmp4.segment(sequence, decodeTime, ticks, nals, keyFrame));
         sequence++;
-        decodeTime += FRAME_TICKS;
+        decodeTime += ticks;
     }
 
     function packet(data) {
@@ -389,12 +433,14 @@
             return;
         }
         var flags = bytes[0];
+        var head = new DataView(bytes.buffer, bytes.byteOffset, HEADER_BYTES);
+        var timeUs = head.getUint32(1) * 4294967296 + head.getUint32(5);
         var body = bytes.subarray(HEADER_BYTES);
         if (flags & FLAG_CONFIG) {
             config(body);
             return;
         }
-        frame(body, (flags & FLAG_KEYFRAME) !== 0);
+        frame(body, (flags & FLAG_KEYFRAME) !== 0, timeUs);
     }
 
     function fitShot() {
@@ -427,7 +473,10 @@
         drawn = false;
         sequence = 1;
         decodeTime = 0;
+        lastUs = null;
+        jumps = 0;
         var video = document.getElementById('video');
+        video.playbackRate = 1;
         video.controls = false;
         video.pause();
         video.removeAttribute('src');

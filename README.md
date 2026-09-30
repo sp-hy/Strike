@@ -62,9 +62,11 @@ on its own is GitHub's release API, at most once a day.
 3. Enable the head unit's ADB access, then select **Daemons → Connect** if needed
   and accept the debugging prompt. Strike restarts once after initial access and
    permissions are ready.
-4. Open **Recordings → Settings**. Choose a recording mode, storage location,
-  space limit, and clip length. Recording starts out switched off.
-5. Turn on **Recorder** in **Daemons**.
+4. Open **Recordings → Settings** if you want to change clip length, quality, or
+  storage. New installs default to continuous recording on the SD card with a
+  20 GB space limit.
+5. The **Recorder** daemon starts automatically once shell access is ready (and
+  again after reboot). Use **Daemons** if you need to stop or restart it.
 6. For parked recording, open **Surveillance → Settings**, enable **Watch the car
   when it is off**, and choose Smart or Continuous mode.
 
@@ -72,32 +74,21 @@ on its own is GitHub's release API, at most once a day.
 
 ## Compatibility
 
-Strike needs a BYD head unit running Android 9 or newer on 64-bit ARM, with
-compatible camera and ignition interfaces and local ADB access. There is no
-model-name restriction; support depends on the head unit and firmware.
+Strike targets the **BYD Shark 6** (DiLink 5, SA8155P) head unit on 64-bit ARM
+with local ADB access. Camera capture uses FastCam (`libfast_cam_capture` +
+`@fast_cam.sock`) with hardware camera map `8,9,5,4`. Identify the vehicle via
+`ro.vehicle.type` containing `DXF`, or a Shark camera profile — not `Build.MODEL`
+alone (often `BYD AUTO`).
 
-Testing so far has been on a BYD Atto 2. Other models and firmware versions have
-not yet been verified.
+Legacy AVMCamera / panoramic-strip profiles (Atto, Seal, Tang) are not supported
+in this build. Live **All** uses the FastCam 2×2 mosaic (logical camera 4). Keep
+the OEM 360 app closed while Strike is recording.
 
-If the camera views are split incorrectly, **Settings → Cameras** offers legacy
-profiles for Seal, Atto 3, and Tang 2022 using Overdrive's camera mappings, plus
-Strike's Atto 2 profile. After choosing one, turn **Recorder** off and on in
-**Daemons**. Automatic uses camera-tag discovery, then recognizable Atto 2 or
-Atto 3 model names, otherwise Overdrive's legacy camera-1 profile. If that camera
-opens but sends no frames for 25 seconds, Automatic tries raw camera 0 and remembers
-it after frames arrive. A firmware change clears that preference. These profiles
-still need testing on each head unit.
+Scratch files live under `Android/data/com.strike/files/daemon` (Shark /
+Overdrive). Capture runs from the APK native library directory, never from
+emulated storage.
 
-Selecting **Atto 2** keeps camera 0 without waiting for automatic recovery, even
-when the head unit identifies itself only as "BYD AUTO".
-
-Hardware details
-
-The current camera path uses BYD's `AVMCamera` interface with a horizontal strip
-of four views. Different layouts need additional handling. The AIS/QCarCam path
-used by some DiLink 5 units is not implemented. A phone or emulator can show the
-interface but cannot provide the car's cameras.
-
+A phone or emulator can show the interface but cannot provide the car's cameras.
 Automatic parked operation requires working ignition readings. Local ADB must be
 available on port 5555 and authorized on the head unit.
 
@@ -185,7 +176,7 @@ Select **Forgot PIN?** below the lock-screen keypad for these instructions. From
 a computer with an authorized ADB connection to the head unit, run:
 
 ```powershell
-adb shell touch /data/local/tmp/.strike_pin_reset
+adb shell touch /sdcard/Android/data/com.strike/files/daemon/.strike_pin_reset
 ```
 
 Reopen or refresh Strike, then set a new PIN under **Settings → Security**.

@@ -2,6 +2,7 @@ package com.strike.daemon
 
 import android.content.Context
 import com.strike.core.Logs
+import com.strike.core.ScratchPaths
 
 private const val TAG = "Daemon"
 
@@ -10,6 +11,7 @@ class Daemon(private val context: Context, private val shell: Shell) {
 
     @Synchronized
     fun start(): Boolean {
+        ScratchPaths.init(context)
         val apk = apkPath() ?: return false
         if (!stop()) return false
         return launch(apk)
@@ -17,26 +19,34 @@ class Daemon(private val context: Context, private val shell: Shell) {
 
     @Synchronized
     fun resume(): Boolean {
+        ScratchPaths.init(context)
         val apk = apkPath() ?: return false
         return launch(apk)
     }
 
     private fun launch(apk: String): Boolean {
+        // Drop interim public scratch left by earlier Shark builds.
+        shell.check(
+            "pkill -9 -f strike_cam 2>/dev/null; pkill -9 -f fast_cam 2>/dev/null; " +
+                "rm -rf /storage/emulated/0/Strike/daemon 2>/dev/null; true"
+        )
         val script = watchdogScript(
             context.packageName, apk, context.applicationInfo.nativeLibraryDir, DAEMON_CLASS
         )
-        if (shell.run(writeScriptLine(script)) != 0) {
+        if (shell.run(ScratchPaths.prepareShellCommand(writeScriptLine(script))) != 0) {
             return false
         }
         return shell.run(
-            "rm -f $CAM_SENTINEL_PATH || exit 1; nohup sh $CAM_SCRIPT_PATH > /dev/null 2>&1 &"
+            ScratchPaths.prepareShellCommand(
+                "rm -f $CAM_SENTINEL_PATH || exit 1; nohup sh $CAM_SCRIPT_PATH > /dev/null 2>&1 &"
+            )
         ) == 0
     }
 
     @Synchronized
     fun stop(shutdown: () -> Boolean = { false }, force: Boolean = true): Boolean {
-        if (shell.run(stopWatchdogLine()) != 0) return false
-        return shell.run(stopDaemonLine(shutdown(), force)) == 0
+        if (shell.run(ScratchPaths.prepareShellCommand(stopWatchdogLine())) != 0) return false
+        return shell.run(ScratchPaths.prepareShellCommand(stopDaemonLine(shutdown(), force))) == 0
     }
 
     private fun apkPath(): String? {
@@ -47,7 +57,7 @@ class Daemon(private val context: Context, private val shell: Shell) {
 }
 
 internal fun stopWatchdogLine(): String =
-    "mkdir -p $STRIKE_DIR || exit 1; chmod 755 $STRIKE_DIR; " +
+    "mkdir -p $STRIKE_DIR || exit 1; chmod 777 $STRIKE_DIR; " +
         "echo stopped from the app > $CAM_SENTINEL_PATH || exit 1; chmod 644 $CAM_SENTINEL_PATH; " +
         killLine(CAM_SCRIPT_PATH) + "; rm -f $CAM_SCRIPT_PATH $CAM_WATCHDOG_PID_PATH"
 

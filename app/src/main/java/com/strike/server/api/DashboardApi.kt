@@ -7,6 +7,7 @@ import com.strike.recording.Storage
 import com.strike.surveillance.EventStorage
 import com.strike.server.JSON
 import com.strike.server.Response
+import com.strike.vehicle.VehicleCache
 import com.strike.vehicle.VehicleTelemetry
 import com.strike.update.Updates
 import org.json.JSONObject
@@ -49,7 +50,7 @@ class DashboardApi(context: Context, shell: Shell, private val daemons: DaemonsA
             put("seen", latest.seen ?: JSONObject.NULL)
         })
 
-        val snapshot = vehicle.snapshot()
+        val snapshot = vehicle.snapshot() ?: VehicleCache.read()
         if (snapshot != null) {
             val car = JSONObject()
             if (snapshot.soc != null) car.put("soc", snapshot.soc)
@@ -57,7 +58,7 @@ class DashboardApi(context: Context, shell: Shell, private val daemons: DaemonsA
             if (snapshot.batteryKwh != null) car.put("batteryKwh", snapshot.batteryKwh)
             if (snapshot.fuelPercent != null) car.put("fuelPercent", snapshot.fuelPercent)
             if (snapshot.fuelRangeKm != null) car.put("fuelRangeKm", snapshot.fuelRangeKm)
-            payload.put("vehicle", car)
+            if (car.length() > 0) payload.put("vehicle", car)
         }
         return Response(200, JSON, payload.toString().toByteArray())
     }

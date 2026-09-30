@@ -59,7 +59,7 @@ full parked recording lifecycle.
 
 ## Capture and storage
 
-- `CameraSource` is the only camera owner. Share its frames through `FrameBus`;
+- `FastCamBackend` is the only camera owner. Share its frames through `FrameBus`;
   a feature must not open another camera session.
 - Capture, encoding, and detection run in `CameraDaemon`. Keep UI and network
   work from blocking frame delivery or the supervisor.
@@ -153,7 +153,7 @@ touches those paths. Report what was run, its result, and anything not verified.
 | Path | Responsibility |
 | --- | --- |
 | `app/src/main/java/com/strike/daemon/` | Shell launch, watchdog, ignition monitoring, and capture supervision |
-| `app/src/main/java/com/strike/camera/` | One camera source, shared frame delivery, GPU crops, and Live encoding |
+| `app/src/main/java/com/strike/camera/` | FastCam capture, shared frame delivery, and Live encoding |
 | `app/src/main/java/com/strike/recording/` | Encoding, muxing, clip storage, retention, and cabin audio |
 | `app/src/main/java/com/strike/surveillance/` | Motion, YOLO detection, event metadata, and the red screen |
 | `app/src/main/java/com/strike/server/` | HTTP dashboard, JSON APIs, and WebSocket delivery |
@@ -163,10 +163,10 @@ touches those paths. Report what was run, its result, and anything not verified.
 | `app/src/test/` | JVM tests |
 
 The app hosts the web server. A separate `app_process` daemon runs as shell UID
-2000 and owns capture, recording, and surveillance. `CameraSource` opens the
-hardware; `FrameBus` shares it among consumers. Live starts its encoder only while
-a browser is watching. Vehicle telemetry is read-only; parked capture separately
-manages the camera power rails and deterrent display.
+2000 and owns capture, recording, and surveillance. `FastCamBackend` starts the
+native capture process; `FrameBus` shares frames among consumers. Live starts its
+encoder only while a browser is watching. Vehicle telemetry is read-only; parked
+capture separately manages the camera power rails and deterrent display.
 
 ## Cloudflare connector
 

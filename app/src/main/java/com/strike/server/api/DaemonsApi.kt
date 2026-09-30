@@ -142,6 +142,7 @@ class DaemonsApi(context: Context, private val shell: Shell, private val online:
     fun connect(): Response {
         val payload = JSONObject()
         payload.put("authorised", shell.retry())
+        if (shell.isAuthorised()) ensureRecorderAutostart()
         forget()
         return Response(200, JSON, payload.toString().toByteArray())
     }
@@ -184,13 +185,30 @@ class DaemonsApi(context: Context, private val shell: Shell, private val online:
     // Process state and recording mode are separate controls.
     fun setRecorder(body: String): Response {
         val wanted = formValue(body, "enabled") ?: return Response(400, TEXT, "No state given".toByteArray())
-        if (wanted == "true") {
+        val enabled = wanted == "true"
+        Config.put(shell, RecordingSettings.RECORDER_ENABLED, enabled)
+        if (enabled) {
             recorder.start()
         } else {
             recorder.stop()
         }
         forget()
         return Response(200, JSON, "{}".toByteArray())
+    }
+
+    /** Start the camera watchdog when enabled (default on for new installs). */
+    fun ensureRecorderAutostart() {
+        if (!Config.getBool(RecordingSettings.RECORDER_ENABLED, true)) return
+        if (!shell.isAuthorised()) return
+        when (recorder.phase) {
+            Phase.STARTING, Phase.RUNNING, Phase.STOPPING -> return
+            Phase.OFF, Phase.FAILED -> Unit
+        }
+        if (recorder.status() != null) return
+        if (processes.isRunning(CAM_SCRIPT_PATH) == true) return
+        Logs.d("Recorder", "autostarting camera daemon")
+        recorder.start()
+        forget()
     }
 
     private fun forget() = synchronized(cardsLock) {
@@ -355,8 +373,6 @@ class DaemonsApi(context: Context, private val shell: Shell, private val online:
         if (camera != null) {
             return "Open, ${camera.optInt("width")} x ${camera.optInt("height")}"
         }
-        val reason = status?.optString("camerasReason").orEmpty()
-        if (reason.isNotEmpty()) return reason
         val factoryDashcam = bydApps.state(BydApps.DASHCAM) == BydApps.ENABLED ||
             processes.isRunning(BydApps.DASHCAM) == true
         return if (factoryDashcam) "Held by the factory dashcam" else DASH
@@ -375,16 +391,13 @@ class DaemonsApi(context: Context, private val shell: Shell, private val online:
         payload.put("cameras", status?.optJSONArray("cameras") ?: JSONArray())
         if (status == null) {
             payload.put("reason", "Start the recorder daemon and the camera becomes available.")
-        } else {
-            val reason = status.optString("camerasReason")
-            if (reason.isNotEmpty()) payload.put("reason", reason)
         }
         return Response(200, JSON, payload.toString().toByteArray())
     }
 
     private fun camerasOf(status: JSONObject?): String {
         val list = status?.optJSONArray("cameras") ?: return DASH
-        if (list.length() == 0) return status.optString("camerasReason", "None")
+        if (list.length() == 0) return "None"
         val names = ArrayList<String>(list.length())
         for (i in 0 until list.length()) {
             val camera = list.getJSONObject(i)

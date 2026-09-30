@@ -49,11 +49,18 @@
 
         function paint(payload) {
             paintLocation(payload);
-            var volume = volumeOf(payload, payload.values[plan.location]);
-            var usable = volume && volume.usable;
-            var budgetMb = payload.values[plan.budget];
+            var preferred = payload.values[plan.location];
+            var volume = volumeOf(payload, preferred);
+            // Prefer the configured volume; if it is missing (e.g. SD unset),
+            // budget against the volume Strike is actually writing to.
+            if (!volume || !volume.usable) {
+                volume = volumeOf(payload, payload.activeLocation || preferred);
+            }
+            var usable = !!(volume && volume.usable);
+            var budgetMb = Number(payload.values[plan.budget]);
             if (usable) {
                 slider.max = volume.ceilingMb;
+                if (budgetMb > volume.ceilingMb) budgetMb = volume.ceilingMb;
             }
             slider.disabled = !usable;
             slider.value = budgetMb;

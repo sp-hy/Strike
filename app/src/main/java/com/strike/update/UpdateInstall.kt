@@ -11,7 +11,8 @@ import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import java.util.UUID
 
-private const val RECEIPT = "$STRIKE_DIR/update-result"
+private val RECEIPT: String
+    get() = "$STRIKE_DIR/update-result"
 
 internal class UpdateInstall(
     private val context: Context,
@@ -29,16 +30,28 @@ internal class UpdateInstall(
         check(shell.isAuthorised()) { "Connect shell access in Daemons before installing" }
         val code = verifyUpdateApk(context, apk, release)
         val id = UUID.randomUUID().toString().replace("-", "")
-        val directory = "$STRIKE_DIR/update-$id"
+        val directory = File("$STRIKE_DIR/update-$id")
         val script = File(context.cacheDir, "update-install.sh")
         try {
-            check(shell.check("mkdir -p $directory && chmod 700 $directory")) { "Cannot prepare the installer" }
-            check(shell.push(apk, "$directory/Strike.apk")) { "Cannot transfer the APK to the installer" }
-            check(shell.read("sha256sum $directory/Strike.apk")?.substringBefore(' ') == release.sha256) {
+            check(
+                shell.check(
+                    com.strike.core.ScratchPaths.prepareShellCommand(
+                        "mkdir -p '$STRIKE_DIR' && chmod 777 '$STRIKE_DIR' 2>/dev/null || true"
+                    )
+                )
+            ) { "Cannot prepare the installer" }
+            check(directory.mkdirs() || directory.isDirectory) { "Cannot prepare the installer" }
+            openShared(directory)
+            val staged = File(directory, "Strike.apk")
+            Files.copy(apk.toPath(), staged.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            openShared(staged)
+            check(shell.read("sha256sum ${staged.absolutePath}")?.substringBefore(' ') == release.sha256) {
                 "The transferred APK is damaged"
             }
             script.writeText(installScript(id))
-            check(shell.push(script, "$directory/install.sh")) { "Cannot prepare the install command" }
+            val install = File(directory, "install.sh")
+            Files.copy(script.toPath(), install.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            openShared(install)
             pauseRecorder { resume ->
                 val plan = JSONObject().put("id", id).put("versionCode", code).put("resume", resume)
                     .put("startedAtMs", System.currentTimeMillis())
@@ -54,7 +67,12 @@ internal class UpdateInstall(
             if (script.exists() && !script.delete()) Logs.w("Updates", "Could not remove the cached install command")
         }
         // A lost ADB reply cannot tell us whether the detached installer started.
-        shell.check("nohup sh $directory/install.sh > /dev/null 2>&1 < /dev/null &")
+        shell.check(
+            com.strike.core.ScratchPaths.prepareShellCommand(
+                "chmod 755 '${directory.absolutePath}' '${directory.absolutePath}/install.sh' 2>/dev/null || true; " +
+                    "nohup sh '${directory.absolutePath}/install.sh' > /dev/null 2>&1 < /dev/null &"
+            )
+        )
     }
 
     fun outcome(): Boolean? {
@@ -92,6 +110,17 @@ internal class UpdateInstall(
         if (!shell.check("rm -f $directory/Strike.apk $directory/install.sh $directory/pid; rmdir $directory")) {
             Logs.w("Updates", "Could not remove the installer staging files")
         }
+    }
+}
+
+private fun openShared(file: File) {
+    try {
+        file.setReadable(true, false)
+        file.setWritable(true, false)
+        if (file.isDirectory || file.name.endsWith(".sh")) {
+            file.setExecutable(true, false)
+        }
+    } catch (_: Exception) {
     }
 }
 

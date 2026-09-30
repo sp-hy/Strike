@@ -1,75 +1,77 @@
 package com.strike.camera
 
-import android.graphics.ImageFormat
-import android.hardware.HardwareBuffer
-import android.media.Image
-import android.media.ImageReader
-import android.opengl.EGL14
-import android.opengl.EGLConfig
-import android.opengl.EGLContext
-import android.opengl.EGLDisplay
-import android.opengl.EGLExt
-import android.opengl.EGLSurface
-import android.opengl.GLES20
-import android.os.Build
-import android.os.Handler
-import android.os.HandlerThread
+import android.os.SystemClock
 import android.view.Surface
+import com.strike.core.Diagnostics
+import com.strike.core.systemProperty
 import com.strike.daemon.DaemonLog
-import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
 
 private const val TAG = "FrameBus"
-private const val FRAME_WAIT_MS = 500L
+private const val FRAME_WAIT_MS = 100
 
-private const val POOL = 6
+/** Every FastCam camera senses at this rate. */
+const val CAPTURE_FPS = 30
 
-/** [frame] is the size of [surface], which is what the crop is drawn into. */
+/** Announced rate when no consumer needs the full sensor rate; halves IPC and pump work. */
+private const val HALF_RATE_FPS = CAPTURE_FPS / 2
+
+/** An anchor camera that has been silent this long hands the tick to the next one. */
+private const val ANCHOR_STALE_MS = 200L
+private const val STATS_EVERY_MS = 10_000L
+private const val LANE_JOIN_MS = 1_000L
+
+/** "0" forces every consumer onto the CPU painter, for A/B measurement. */
+private const val GPU_PROPERTY = "debug.strike.gpu"
+
 class Consumer(
     val name: String,
     val surface: Surface,
     val view: CameraView,
-    val frame: Frame
-)
+    val frame: Frame,
+    fps: Int = CAPTURE_FPS,
+    /** Encoder input surfaces take GPU frames with exact timestamps; ImageReaders stay on the CPU. */
+    val gpu: Boolean = false
+) {
+    val fps: Int = fps.coerceIn(1, CAPTURE_FPS)
 
-// Owns capture and all EGL work on the bus thread.
-// Other threads enqueue consumer changes; they must not destroy EGL resources.
-class FrameBus(val stripWidth: Int, val stripHeight: Int) {
+    // Touched only on the bus thread; negative until the first tick seeds it.
+    internal var phase = -1
+
+    internal val painted = AtomicInteger()
+    internal val paintNs = AtomicLong()
+    internal val superseded = AtomicInteger()
+}
+
+/**
+ * FastCam frame fan-out: stage IPC frames, then have each consumer's own paint lane
+ * draw it at the consumer's rate, on the anchor camera's cadence.
+ */
+class FrameBus(val frameWidth: Int, val frameHeight: Int) {
 
     private val consumers = CopyOnWriteArrayList<Consumer>()
-    private val targets = HashMap<String, EGLSurface>()
-    private val retired = ConcurrentLinkedQueue<String>()
-    private val drawn = HashSet<String>()
-    private val reported = HashSet<String>()
+    private val lanes = ConcurrentHashMap<String, Lane>()
 
-    private var display: EGLDisplay = EGL14.EGL_NO_DISPLAY
-    private var context: EGLContext = EGL14.EGL_NO_CONTEXT
-    private var config: EGLConfig? = null
-    private var readback: EGLConfig? = null
-    private var pump: EGLSurface = EGL14.EGL_NO_SURFACE
-
-    private var texture = 0
-    private var reader: ImageReader? = null
-    private var readerThread: HandlerThread? = null
-    private var shader: StripShader? = null
     private var thread: Thread? = null
-    private var stampedAtNs = 0L
-
-    // The texture samples this buffer until the next one is bound, so the
-    // frame it came from cannot be closed before then.
-    private var held: Image? = null
-    private var heldBuffer: HardwareBuffer? = null
 
     @Volatile private var running = false
+    @Volatile private var ready = false
     @Volatile private var frames = 0L
     @Volatile private var frameAtMs = 0L
     @Volatile private var openedAtMs = 0L
+    @Volatile private var changed = true
 
-    private val arrived = Object()
-    private var pending = false
-
-    @Volatile var input: Surface? = null
-        private set
+    private var needs = -1
+    private var rate = CAPTURE_FPS
+    private var copying = true
+    private val seenAtMs = LongArray(4)
+    private val received = IntArray(4)
+    private var tickAtMs = 0L
+    private var ticks = 0
+    private var statsAtMs = 0L
 
     val frameCount: Long get() = frames
 
@@ -79,268 +81,268 @@ class FrameBus(val stripWidth: Int, val stripHeight: Int) {
             return if (since == 0L) 0L else System.currentTimeMillis() - since
         }
 
-    fun start(): Surface? {
-        val ready = Object()
+    /** Starts the pump thread; false when FastCam's JNI is unavailable. */
+    fun start(): Boolean {
+        val gate = Object()
         var failed = false
         thread = Thread({
             val opened = try {
                 open()
             } catch (t: Throwable) {
-                DaemonLog.e(TAG, "the graphics stack refused the camera: ${t.javaClass.simpleName}: ${t.message}")
+                DaemonLog.e(TAG, "FastCam bus refused: ${t.javaClass.simpleName}: ${t.message}")
                 false
             }
-            synchronized(ready) {
+            synchronized(gate) {
                 failed = !opened
-                ready.notifyAll()
+                ready = opened
+                gate.notifyAll()
             }
             if (opened) spin()
-            shut()
         }, "framebus").also { it.start() }
 
-        synchronized(ready) {
-            while (input == null && !failed) ready.wait(5_000)
+        synchronized(gate) {
+            while (!failed && !ready) gate.wait(5_000)
         }
-        return input
+        return !failed
     }
 
     fun stop() {
         running = false
         thread?.join(2_000)
         thread = null
+        ready = false
+        for (name in lanes.keys.toList()) lanes.remove(name)?.close()
     }
 
-    // Only the bus thread may release a replaced consumer's EGL surface.
     fun add(consumer: Consumer) {
-        consumers.removeAll { it.name == consumer.name }
-        retired.add(consumer.name)
+        remove(consumer.name)
+        val gpu = consumer.gpu && systemProperty(GPU_PROPERTY) != "0"
+        lanes[consumer.name] = Lane(consumer, gpu)
         consumers.add(consumer)
+        changed = true
     }
 
+    // Returns once the lane has let go of the surface, so the owner can release it.
     fun remove(name: String) {
         consumers.removeAll { it.name == name }
-        retired.add(name)
+        lanes.remove(name)?.close()
+        changed = true
     }
 
     private fun open(): Boolean {
-        if (!CameraTexture.isLoaded) return false
-        display = EGL14.eglGetDisplay(EGL14.EGL_DEFAULT_DISPLAY)
-        val version = IntArray(2)
-        if (!EGL14.eglInitialize(display, version, 0, version, 1)) {
-            DaemonLog.e(TAG, "the graphics driver would not start")
+        if (!FastCamNative.ensureLoaded()) {
+            DaemonLog.e(TAG, "FastCam JNI is not loaded")
             return false
         }
-        config = chooseConfig(recordable = true) ?: return false
-        readback = chooseConfig(recordable = false)
-        val attributes = intArrayOf(EGL14.EGL_CONTEXT_CLIENT_VERSION, 2, EGL14.EGL_NONE)
-        context = EGL14.eglCreateContext(display, config, EGL14.EGL_NO_CONTEXT, attributes, 0)
-        if (context == EGL14.EGL_NO_CONTEXT) {
-            DaemonLog.e(TAG, "no graphics context: ${EGL14.eglGetError()}")
-            return false
-        }
-        pump = EGL14.eglCreatePbufferSurface(
-            display, config, intArrayOf(EGL14.EGL_WIDTH, 1, EGL14.EGL_HEIGHT, 1, EGL14.EGL_NONE), 0
-        )
-        if (!EGL14.eglMakeCurrent(display, pump, pump, context)) {
-            DaemonLog.e(TAG, "cannot draw on this context: ${EGL14.eglGetError()}")
-            return false
-        }
-
-        val compiled = StripShader.compile() ?: return false
-        shader = compiled
-        texture = compiled.newTexture()
-        DaemonLog.d(TAG, "graphics: " + CameraTexture.report())
-
-        // The callback must not land on this thread: it waits for the frame
-        // the callback announces, so sharing one thread would deadlock.
-        val spinner = HandlerThread("frames").also { it.start() }
-        readerThread = spinner
-        val fresh = newReader()
-        fresh.setOnImageAvailableListener({ announce() }, Handler(spinner.looper))
-        reader = fresh
-        input = fresh.surface
+        openedAtMs = System.currentTimeMillis()
+        statsAtMs = SystemClock.elapsedRealtime()
+        FastCamNative.takeCopyNanos()
+        rate = CAPTURE_FPS
+        FastCamNative.setRate(CAPTURE_FPS)
+        running = true
         return true
-    }
-
-    private fun newReader(): ImageReader =
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-            ImageReader.newInstance(
-                stripWidth, stripHeight, ImageFormat.PRIVATE, POOL,
-                HardwareBuffer.USAGE_GPU_SAMPLED_IMAGE
-            )
-        } else {
-            ImageReader.newInstance(stripWidth, stripHeight, ImageFormat.PRIVATE, POOL)
-        }
-
-    /** RECORDABLE is required for a MediaCodec surface on Adreno. */
-    private fun chooseConfig(recordable: Boolean): EGLConfig? {
-        val attributes = if (recordable) {
-            intArrayOf(
-                EGL14.EGL_RED_SIZE, 8,
-                EGL14.EGL_GREEN_SIZE, 8,
-                EGL14.EGL_BLUE_SIZE, 8,
-                EGL14.EGL_ALPHA_SIZE, 8,
-                EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
-                EGLExt.EGL_RECORDABLE_ANDROID, 1,
-                EGL14.EGL_NONE
-            )
-        } else {
-            intArrayOf(
-                EGL14.EGL_RED_SIZE, 8,
-                EGL14.EGL_GREEN_SIZE, 8,
-                EGL14.EGL_BLUE_SIZE, 8,
-                EGL14.EGL_ALPHA_SIZE, 8,
-                EGL14.EGL_RENDERABLE_TYPE, EGL14.EGL_OPENGL_ES2_BIT,
-                EGL14.EGL_NONE
-            )
-        }
-        val found = arrayOfNulls<EGLConfig>(1)
-        val count = IntArray(1)
-        if (!EGL14.eglChooseConfig(display, attributes, 0, found, 0, 1, count, 0) || count[0] == 0) {
-            if (recordable) DaemonLog.e(TAG, "this driver has no surface the encoder can share")
-            return null
-        }
-        return found[0]
-    }
-
-    private fun announce() {
-        synchronized(arrived) {
-            pending = true
-            arrived.notifyAll()
-        }
     }
 
     private fun spin() {
-        running = true
-        openedAtMs = System.currentTimeMillis()
         while (running) {
-            val arrivedNow = synchronized(arrived) {
-                if (!pending) arrived.wait(FRAME_WAIT_MS)
-                val had = pending
-                pending = false
-                had
+            if (changed) {
+                changed = false
+                syncNeeds()
+                syncRate()
+                copy(consumers.isNotEmpty())
             }
-            if (!arrivedNow) continue
-            if (bind()) {
-                frameAtMs = System.currentTimeMillis()
-                frames++
-                paint(stamp())
+            val cam = FastCamNative.pumpFrame(FRAME_WAIT_MS)
+            val now = SystemClock.elapsedRealtime()
+            if (cam < 0) {
+                if (!FastCamNative.connected()) Thread.sleep(50)
+                report(now)
+                continue
             }
+            val arrivedNs = System.nanoTime()
+            frameAtMs = System.currentTimeMillis()
+            frames++
+            seenAtMs[cam] = now
+            received[cam]++
+            if (isTick(cam, now)) {
+                tickAtMs = now
+                ticks++
+                paint(arrivedNs)
+                copy(consumers.any { it.phase < 0 || it.phase + it.fps >= rate })
+            }
+            report(now)
         }
     }
 
-    private fun bind(): Boolean {
-        val fresh = reader?.acquireLatestImage() ?: return false
-        val buffer = fresh.hardwareBuffer
-        if (buffer == null) {
-            fresh.close()
-            return false
-        }
-        val bound = CameraTexture.bind(buffer, texture)
-        release()
-        if (!bound) {
-            buffer.close()
-            fresh.close()
-            return false
-        }
-        held = fresh
-        heldBuffer = buffer
-        return true
+    private fun copy(wanted: Boolean) {
+        if (wanted == copying) return
+        copying = wanted
+        FastCamNative.setCopying(wanted)
     }
 
-    private fun release() {
-        heldBuffer?.close()
-        heldBuffer = null
-        held?.close()
-        held = null
-    }
-
-    // Some HAL frames have zero or repeated timestamps; use the capture clock for muxing.
-    private fun stamp(): Long {
-        val now = System.nanoTime()
-        stampedAtNs = if (now <= stampedAtNs) stampedAtNs + 1_000L else now
-        return stampedAtNs
-    }
-
-    private fun paint(timestampNs: Long) {
-        val program = shader ?: return
-        retire()
+    // Stage only the views someone is painting; an idle bus still stages the mosaic.
+    private fun syncNeeds() {
+        var mask = 0
         for (consumer in consumers) {
-            val target = targetFor(consumer) ?: continue
-            if (!EGL14.eglMakeCurrent(display, target, target, context)) {
-                fault(consumer.name, "cannot be drawn on")
-                continue
+            mask = mask or (1 shl aisByteForViewMode(consumer.view))
+        }
+        if (mask == 0) mask = NEED_MOSAIC
+        if (mask == needs) return
+        needs = mask
+        FastCamNative.setNeeds(mask)
+    }
+
+    // Encoders need evenly spaced frames, so they keep 30 unless their rate divides 15.
+    private fun syncRate() {
+        val half = consumers.all {
+            it.fps <= HALF_RATE_FPS && (!it.gpu || HALF_RATE_FPS % it.fps == 0)
+        }
+        val wanted = if (half) HALF_RATE_FPS else CAPTURE_FPS
+        if (wanted == rate) return
+        rate = wanted
+        for (consumer in consumers) consumer.phase = -1
+        FastCamNative.setRate(wanted)
+        DaemonLog.d(TAG, "cameras announce ${wanted}fps")
+    }
+
+    // Paint once per anchor frame so every consumer follows one camera's cadence.
+    private fun isTick(cam: Int, now: Long): Boolean {
+        val anchor = anchor(now)
+        if (anchor >= 0) return cam == anchor
+        return now - tickAtMs >= 1000L / rate
+    }
+
+    private fun anchor(now: Long): Int {
+        for (cam in 0 until 4) {
+            if (!needsCamera(cam)) continue
+            val seen = seenAtMs[cam]
+            if (seen != 0L && now - seen <= ANCHOR_STALE_MS) return cam
+        }
+        return -1
+    }
+
+    private fun needsCamera(cam: Int): Boolean =
+        needs and NEED_MOSAIC != 0 || needs and (1 shl cam) != 0
+
+    private fun paint(arrivedNs: Long) {
+        for (consumer in consumers) {
+            if (consumer.phase < 0) consumer.phase = rate - consumer.fps
+            consumer.phase += consumer.fps
+            if (consumer.phase < rate) continue
+            consumer.phase -= rate
+            lanes[consumer.name]?.post(arrivedNs)
+        }
+    }
+
+    private fun report(now: Long) {
+        val elapsed = now - statsAtMs
+        if (elapsed < STATS_EVERY_MS) return
+        statsAtMs = now
+        val seconds = elapsed / 1000.0
+        val copyMs = FastCamNative.takeCopyNanos() / 1_000_000.0
+        val line = StringBuilder("[perf] in=")
+        line.append(received.joinToString("/") { rate(it, seconds) })
+        line.append(" ticks=").append(rate(ticks, seconds))
+        line.append(" copy=").append(ms(copyMs / seconds)).append("ms/s")
+        for (consumer in consumers) {
+            val painted = consumer.painted.getAndSet(0)
+            val paintMs = consumer.paintNs.getAndSet(0L) / 1_000_000.0
+            val superseded = consumer.superseded.getAndSet(0)
+            val average = if (painted > 0) paintMs / painted else 0.0
+            val kind = if (lanes[consumer.name]?.onGpu == true) "gpu" else "cpu"
+            line.append(' ').append(consumer.name).append('=')
+                .append(rate(painted, seconds)).append("fps@")
+                .append(ms(average)).append("ms/").append(kind)
+            if (superseded > 0) line.append(" dropped=").append(superseded)
+        }
+        if (Diagnostics.perfLogs()) DaemonLog.d(TAG, line.toString())
+        received.fill(0)
+        ticks = 0
+    }
+
+    private fun rate(count: Int, seconds: Double): String = "%.0f".format(count / seconds)
+
+    private fun ms(value: Double): String = "%.1f".format(value)
+
+    // One thread per consumer, so a slow encoder never delays the bus or another consumer.
+    private class Lane(private val consumer: Consumer, private val gpu: Boolean) {
+
+        private val gate = Object()
+        private var pendingNs = NONE
+        private var open = true
+        private var faulted = false
+
+        @Volatile var onGpu = false
+            private set
+
+        private val thread = Thread({ run() }, "paint-${consumer.name}").also {
+            it.isDaemon = true
+            it.start()
+        }
+
+        // Latest wins: a frame the lane has not started yet is replaced by the newer one.
+        fun post(arrivedNs: Long) = synchronized(gate) {
+            if (pendingNs != NONE) consumer.superseded.incrementAndGet()
+            pendingNs = arrivedNs
+            gate.notify()
+        }
+
+        fun close() {
+            synchronized(gate) {
+                open = false
+                gate.notify()
             }
-            program.draw(texture, tilesOf(consumer.view), consumer.frame)
-            EGLExt.eglPresentationTimeANDROID(display, target, timestampNs)
-            if (!EGL14.eglSwapBuffers(display, target)) {
-                fault(consumer.name, "would not take the frame")
-                continue
+            if (Thread.currentThread() !== thread) thread.join(LANE_JOIN_MS)
+        }
+
+        private fun take(): Long? = synchronized(gate) {
+            while (open && pendingNs == NONE) gate.wait()
+            if (!open) return null
+            val arrived = pendingNs
+            pendingNs = NONE
+            arrived
+        }
+
+        private fun run() {
+            val gl = if (gpu) FastCamNative.glCreate(consumer.surface) else 0L
+            onGpu = gl != 0L
+            if (gpu) {
+                if (onGpu) DaemonLog.d(TAG, "${consumer.name} paints on the GPU")
+                else DaemonLog.w(TAG, "${consumer.name} could not start the GPU painter; using the CPU")
             }
-            if (drawn.add(consumer.name)) DaemonLog.d(TAG, "${consumer.name} took its first frame")
+            var first = true
+            try {
+                while (true) {
+                    val arrived = take() ?: break
+                    val started = System.nanoTime()
+                    val ok = try {
+                        if (gl != 0L) FastCamNative.glDraw(gl, consumer.view, arrived)
+                        else consumer.surface.isValid && FastCamNative.draw(consumer.surface, consumer.view)
+                    } catch (t: Throwable) {
+                        fault(t.message ?: "draw failed")
+                        false
+                    }
+                    consumer.paintNs.addAndGet(System.nanoTime() - started)
+                    if (ok) {
+                        consumer.painted.incrementAndGet()
+                        if (first) DaemonLog.d(TAG, "${consumer.name} took its first frame")
+                        first = false
+                    } else {
+                        fault("would not take the frame")
+                    }
+                }
+            } finally {
+                if (gl != 0L) FastCamNative.glDestroy(gl)
+            }
+        }
+
+        private fun fault(what: String) {
+            if (faulted) return
+            faulted = true
+            DaemonLog.e(TAG, "${consumer.name} $what")
+        }
+
+        private companion object {
+            const val NONE = Long.MIN_VALUE
         }
     }
-
-    private fun retire() {
-        while (true) {
-            val name = retired.poll() ?: return
-            targets.remove(name)?.let { EGL14.eglDestroySurface(display, it) }
-            drawn.remove(name)
-            reported.remove(name)
-        }
-    }
-
-    private fun fault(name: String, what: String) {
-        if (!reported.add(name)) return
-        DaemonLog.e(TAG, "$name $what: ${EGL14.eglGetError()}")
-    }
-
-    private fun targetFor(consumer: Consumer): EGLSurface? {
-        targets[consumer.name]?.let { return it }
-        if (!consumer.surface.isValid) return null
-        val made = windowOn(consumer.surface, config) ?: windowOn(consumer.surface, readback)
-        if (made == null) {
-            DaemonLog.e(TAG, "${consumer.name} cannot take frames: ${EGL14.eglGetError()}")
-            consumers.remove(consumer)
-            return null
-        }
-        targets[consumer.name] = made
-        return made
-    }
-
-    private fun windowOn(surface: Surface, which: EGLConfig?): EGLSurface? {
-        if (which == null) return null
-        val made = EGL14.eglCreateWindowSurface(
-            display, which, surface, intArrayOf(EGL14.EGL_NONE), 0
-        )
-        return if (made == null || made == EGL14.EGL_NO_SURFACE) null else made
-    }
-
-    private fun shut() {
-        for (target in targets.values) EGL14.eglDestroySurface(display, target)
-        targets.clear()
-        shader?.release()
-        shader = null
-        release()
-        reader?.close()
-        reader = null
-        readerThread?.quitSafely()
-        readerThread = null
-        input = null
-        if (display != EGL14.EGL_NO_DISPLAY) {
-            EGL14.eglMakeCurrent(
-                display, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_SURFACE, EGL14.EGL_NO_CONTEXT
-            )
-            if (pump != EGL14.EGL_NO_SURFACE) EGL14.eglDestroySurface(display, pump)
-            if (context != EGL14.EGL_NO_CONTEXT) EGL14.eglDestroyContext(display, context)
-            EGL14.eglTerminate(display)
-        }
-        display = EGL14.EGL_NO_DISPLAY
-        context = EGL14.EGL_NO_CONTEXT
-        pump = EGL14.EGL_NO_SURFACE
-    }
-}
-
-internal fun clear() {
-    GLES20.glClearColor(0f, 0f, 0f, 1f)
-    GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT)
 }

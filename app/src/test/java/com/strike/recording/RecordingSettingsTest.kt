@@ -38,6 +38,13 @@ class RecordingSettingsTest {
     }
 
     @Test
+    fun newInstallsPreferContinuousOnSdWithTwentyGigBudget() {
+        assertEquals("continuous", RecordingSettings.fallback(RecordingSettings.MODE))
+        assertEquals("sd", RecordingSettings.fallback(RecordingSettings.LOCATION))
+        assertEquals(20_480, RecordingSettings.BUDGET_FALLBACK_MB)
+    }
+
+    @Test
     fun everyChoiceOffersItsOwnFallback() {
         for ((key, choice) in RecordingSettings.choices) {
             assertTrue(key, choice.options.contains(choice.fallback))

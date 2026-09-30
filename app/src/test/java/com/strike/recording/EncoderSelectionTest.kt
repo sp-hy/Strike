@@ -1,10 +1,8 @@
 package com.strike.recording
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
-import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class EncoderSelectionTest {
@@ -55,27 +53,5 @@ class EncoderSelectionTest {
         )
         assertNull(selected)
         assertEquals(listOf("first", "second"), opened)
-    }
-
-    @Test
-    fun legacySoftwareComponentsDoNotBecomeFallbackEncoders() {
-        for (name in listOf(
-            "OMX.google.h264.encoder", "c2.android.avc.encoder", "c2.google.avc.encoder",
-            "OMX.SEC.AVC.Encoder", "OMX.ffmpeg.video.encoder", "avc.encoder",
-            "OMX.vendor.video.encoder.avc.sw", "OMX.vendor.sw.avc.encoder",
-            "OMX.vendor.sw_avc.encoder"
-        )) {
-            assertFalse(name, legacyHardwareEncoder(name))
-        }
-    }
-
-    @Test
-    fun legacyVendorEncodersRemainEligible() {
-        for (name in listOf(
-            "OMX.qcom.video.encoder.avc", "OMX.qcom.video.encoder.hevc",
-            "OMX.MTK.VIDEO.ENCODER.AVC", "c2.qti.avc.encoder", "OMX.Exynos.AVC.Encoder"
-        )) {
-            assertTrue(name, legacyHardwareEncoder(name))
-        }
     }
 }

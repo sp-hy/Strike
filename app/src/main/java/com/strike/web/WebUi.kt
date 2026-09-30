@@ -1,5 +1,6 @@
 package com.strike.web
 
+import android.content.pm.ApplicationInfo
 import android.net.Uri
 import android.graphics.Bitmap
 import android.view.View
@@ -20,6 +21,12 @@ import com.strike.server.pagePath
 
 private const val TAG = "WebUi"
 private const val HOST = "127.0.0.1"
+private const val STARTING_HTML = """<!DOCTYPE html><html><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>html,body{margin:0;height:100%;background:#0b0b0d;color:#f2f2f5;
+font-family:system-ui,sans-serif}body{display:flex;align-items:center;justify-content:center}
+p{margin:0;font-size:1.125rem;letter-spacing:.02em;opacity:.72}</style></head>
+<body><p>Starting Strike…</p></body></html>"""
 
 object WebUi {
 
@@ -27,6 +34,8 @@ object WebUi {
 
     fun mount(view: WebView) {
         web = view
+        val debuggable = view.context.applicationInfo.flags and ApplicationInfo.FLAG_DEBUGGABLE != 0
+        WebView.setWebContentsDebuggingEnabled(debuggable)
         val settings = view.settings
         settings.javaScriptEnabled = true
         settings.domStorageEnabled = true
@@ -39,12 +48,23 @@ object WebUi {
         // Keep navigation inside the WebView rather than opening the external browser.
         val client = StrikeWebViewClient()
         view.webViewClient = client
+        // Paint immediately so first-run ADB / dashboard attach is not a blank screen.
+        client.showStarting(view)
         (view.context.applicationContext as StrikeApp).dashboard.observe { cookie, _ ->
             if (web === view) CookieManager.getInstance().setCookie(page("/"), cookie) { accepted ->
                 if (accepted) client.connected(view)
                 else Logs.w(TAG, "The car screen could not establish its session. Reopen Strike")
             }
         }
+    }
+
+    // A hidden WebView otherwise keeps animating and decoding video on the GPU.
+    fun pause() {
+        web?.onPause()
+    }
+
+    fun resume() {
+        web?.onResume()
     }
 
     fun cover() {
@@ -60,7 +80,19 @@ private class StrikeWebViewClient : WebViewClient() {
     private var failed = false
     private var recovering = false
 
+    fun showStarting(view: WebView) {
+        view.visibility = View.VISIBLE
+        view.loadDataWithBaseURL(
+            null,
+            STARTING_HTML,
+            "text/html",
+            Charsets.UTF_8.name(),
+            null
+        )
+    }
+
     fun connected(view: WebView) {
+        view.visibility = View.VISIBLE
         val path = pagePath(Uri.parse(destination).path ?: "")
         view.loadUrl(if (path == ACCESS_PAGE) page("/") else destination)
     }
@@ -79,16 +111,16 @@ private class StrikeWebViewClient : WebViewClient() {
             request.url.host != HOST || request.url.port != HttpServer.PORT) return
         failed = true
         if (recovering) {
-            view.visibility = View.VISIBLE
+            showStarting(view)
             Logs.w(TAG, "The dashboard could not load. Reopen Strike to retry")
             return
         }
         recovering = true
         destination = request.url.toString()
-        view.visibility = View.INVISIBLE
+        showStarting(view)
         view.stopLoading()
         (view.context.applicationContext as StrikeApp).dashboard.reconnect { ready ->
-            if (!ready && failed) view.visibility = View.VISIBLE
+            if (!ready && failed) showStarting(view)
         }
     }
 

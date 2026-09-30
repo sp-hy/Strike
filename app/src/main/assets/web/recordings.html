@@ -13,7 +13,10 @@
 <body>
 
     <header class="topbar">
-        <img class="topbar__brand" src="img/wordmark.webp" alt="Strike" width="144" height="20">
+        <div class="topbar__mark">
+            <img class="topbar__brand" src="img/wordmark.webp" alt="Strike" width="144" height="20">
+            <span class="topbar__edition">shark-beta</span>
+        </div>
         <nav class="nav">
             <a class="nav__link" href="/">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Dashboard
@@ -156,7 +159,7 @@
                         <span class="row__label">Storage limit</span>
                         <span class="control">
                             <span class="control__end" id="budgetFloor">&mdash;</span>
-                            <input class="slider" type="range" data-key="storage.budgetMb" min="100" step="100" value="500">
+                            <input class="slider" type="range" data-key="storage.budgetMb" min="100" step="100" value="20480">
                             <span class="control__end" id="budgetCeiling">&mdash;</span>
                             <span class="control__value" id="budget">&mdash;</span>
                         </span>

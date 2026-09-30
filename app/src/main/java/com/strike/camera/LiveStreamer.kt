@@ -11,7 +11,8 @@ import com.strike.recording.Sample
 
 private const val TAG = "Live"
 
-const val LIVE_FRAME_RATE_FPS = 12
+// Divides the 30 fps capture rate, so frames stay evenly spaced.
+const val LIVE_FRAME_RATE_FPS = 15
 const val LIVE_BITRATE_BPS = 1_500_000
 
 private const val CONSUMER = "live"
@@ -23,6 +24,7 @@ class LiveStreamer(private val relay: PacketRelay) {
     private var encoder: Encoder? = null
     private var sentConfig = false
     private var bitrateBps = 0
+    @Volatile private var cadence: Cadence? = null
 
     @Volatile
     private var frames = 0L
@@ -37,7 +39,7 @@ class LiveStreamer(private val relay: PacketRelay) {
 
     fun start(bus: FrameBus, view: CameraView, frameRateFps: Int, bitrateBps: Int): Boolean {
         if (isStreaming) return true
-        val frame = liveFrameOf(view, bus.stripWidth, bus.stripHeight)
+        val frame = liveFrameOf(view, bus.frameWidth, bus.frameHeight)
         val fresh = Encoder(
             frame.width,
             frame.height,
@@ -46,8 +48,9 @@ class LiveStreamer(private val relay: PacketRelay) {
             MediaFormat.MIMETYPE_VIDEO_AVC,
             ::relay
         )
+        cadence = Cadence(CONSUMER, frameRateFps)
         val surface = fresh.start() ?: return false
-        bus.add(Consumer(CONSUMER, surface, view, frame))
+        bus.add(Consumer(CONSUMER, surface, view, frame, frameRateFps, gpu = true))
         this.bus = bus
         this.view = view
         this.bitrateBps = bitrateBps
@@ -79,6 +82,7 @@ class LiveStreamer(private val relay: PacketRelay) {
     private fun relay(sample: Sample) {
         val header = encoder?.format
         val keyFrame = sample.flags and MediaCodec.BUFFER_FLAG_KEY_FRAME != 0
+        cadence?.onSample(sample.timeUs, sample.flags)
         frames++
         if (frames == 1L) DaemonLog.d(TAG, "first live frame, ${sample.bytes.size} bytes")
         if (frames % 240 == 0L) DaemonLog.d(TAG, "$frames live frames encoded")

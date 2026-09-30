@@ -1,4 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Strike</string>
+    <string name="vehicle_api_title">Allow vehicle data access?</string>
+    <string name="vehicle_api_message">Strike needs to relax a head-unit hidden-API restriction (scoped to BYD com.ts.* and dalvik.system) so camera and vehicle APIs can bind. Tap Allow — the setting is applied and the app restarts. This resets on car reboot and is re-applied when shell access is ready.</string>
+    <string name="vehicle_api_allow">Allow</string>
+    <string name="vehicle_api_not_now">Not now</string>
 </resources>

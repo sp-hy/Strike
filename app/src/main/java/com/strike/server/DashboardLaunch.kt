@@ -1,6 +1,7 @@
 package com.strike.server
 
 import android.content.Context
+import com.strike.core.ScratchPaths
 import com.strike.daemon.Shell
 import com.strike.daemon.STRIKE_DIR
 import java.io.File
@@ -11,18 +12,54 @@ internal fun dashboardDirectory(context: Context): String {
 }
 
 internal fun launchDashboard(context: Context, shell: Shell): Boolean {
-    val directory = dashboardDirectory(context)
-    val script = File(context.cacheDir, "start-dashboard.sh")
-    script.writeText(dashboardScript(directory))
-    return shell.check("mkdir -p '$directory' && chmod 700 '$directory'") &&
-        shell.push(script, "$directory/start.sh") &&
-        shell.check("chmod 700 '$directory/start.sh'; " +
-            "nohup sh '$directory/start.sh' </dev/null >/dev/null 2>&1 &")
+    ScratchPaths.ensureStrikeTree()
+    val directory = File(dashboardDirectory(context))
+    // Older builds left this dir owned by shell with mode 700 → app EACCES on start.sh.
+    if (!shell.check(
+            ScratchPaths.prepareShellCommand(
+                "rm -rf '${directory.absolutePath}'; " +
+                    "chmod 777 '${ScratchPaths.getDir()}' '$STRIKE_DIR' 2>/dev/null || true"
+            )
+        )
+    ) {
+        return false
+    }
+    if (!directory.mkdirs()) return false
+    openShared(directory)
+    val start = File(directory, "start.sh")
+    start.writeText(dashboardScript(directory.absolutePath))
+    openShared(start)
+    return shell.check(
+        ScratchPaths.prepareShellCommand(
+            "chmod 755 '${directory.absolutePath}' '${start.absolutePath}' 2>/dev/null || true; " +
+                "nohup sh '${start.absolutePath}' </dev/null >/dev/null 2>&1 &"
+        )
+    )
 }
 
-internal fun dashboardScript(directory: String): String = """
+private fun openShared(file: File) {
+    try {
+        file.setReadable(true, false)
+        file.setWritable(true, false)
+        if (file.isDirectory || file.name.endsWith(".sh")) {
+            file.setExecutable(true, false)
+        }
+    } catch (_: Exception) {
+    }
+}
+
+internal fun dashboardScript(directory: String): String {
+    val scratch = ScratchPaths.getDir()
+    val strike = "$scratch/strike".trimEnd('/')
+    return """
     #!/system/bin/sh
-    umask 077
+    umask 022
+    export STRIKE_SCRATCH='$scratch'
+    export OVERDRIVE_SCRATCH='$scratch'
+    export TMPDIR='$scratch'
+    mkdir -p '$scratch' '$strike' '$directory' || true
+    chmod 777 '$scratch' '$strike' 2>/dev/null || true
+    chmod 755 '$directory' 2>/dev/null || true
     failures=0
     while true; do
         apk=${'$'}(pm path com.strike 2>/dev/null | grep '/base.apk${'$'}' | head -n 1 | sed 's/^package://')
@@ -40,3 +77,4 @@ internal fun dashboardScript(directory: String): String = """
         sleep ${'$'}((failures * 3))
     done
 """.trimIndent() + "\n"
+}

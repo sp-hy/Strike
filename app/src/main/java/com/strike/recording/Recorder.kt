@@ -2,6 +2,7 @@ package com.strike.recording
 
 import android.media.MediaCodec
 import android.media.MediaFormat
+import com.strike.camera.Cadence
 import com.strike.camera.CameraView
 import com.strike.camera.Consumer
 import com.strike.camera.Frame
@@ -44,6 +45,7 @@ class Recorder(
 
     private var bus: FrameBus? = null
     private var encoder: Encoder? = null
+    @Volatile private var cadence: Cadence? = null
     private var writerThread: Thread? = null
     private var closer: Thread? = null
     private val toClose = ArrayBlockingQueue<ClipWriter>(8)
@@ -71,7 +73,7 @@ class Recorder(
     fun start(options: RecordingOptions, bus: FrameBus): Boolean {
         if (running) return true
         sweepUnfinished(dir, System.currentTimeMillis())
-        val wanted = frameOf(CameraView.ALL, bus.stripWidth, bus.stripHeight)
+        val wanted = frameOf(CameraView.ALL, bus.frameWidth, bus.frameHeight)
         val encoder = Encoder(
             wanted.width,
             wanted.height,
@@ -80,10 +82,11 @@ class Recorder(
             mimeTypeOf(options.codec),
             ::enqueue
         )
+        cadence = Cadence(CONSUMER, options.frameRateFps)
         val surface = encoder.start() ?: return false
         samples.clear()
         running = true
-        bus.add(Consumer(CONSUMER, surface, CameraView.ALL, wanted))
+        bus.add(Consumer(CONSUMER, surface, CameraView.ALL, wanted, options.frameRateFps, gpu = true))
         this.bus = bus
         this.encoder = encoder
         frame = wanted
@@ -181,6 +184,7 @@ class Recorder(
     // Preserve splice samples: losing one can prevent the next clip from opening.
     private fun enqueue(sample: Sample) {
         if (!running) return
+        cadence?.onSample(sample.timeUs, sample.flags)
         if (sample.startsClip) {
             try {
                 while (running) {

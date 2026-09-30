@@ -2,6 +2,7 @@ package com.strike.vehicle
 
 import android.content.Context
 import android.os.Looper
+import android.os.Process
 import com.strike.core.Logs
 
 private const val TAG = "Vehicle"
@@ -16,7 +17,8 @@ private const val RETRY_MS = 30_000L
 
 private val GEARS = arrayOf("P", "R", "N", "D", "M", "S")
 
-// Read-only BYD vehicle signals.
+// Read-only BYD vehicle signals. Call from the app UID only — shell (uid 2000)
+// cannot hold BYDAUTO grants (same constraint as Open-DiKey).
 class VehicleTelemetry(
     private val context: Context,
     private val warn: (String) -> Unit = { Logs.w(TAG, it) }
@@ -25,8 +27,11 @@ class VehicleTelemetry(
     private val lock = Any()
     private val devices = HashMap<String, Any>()
     private val triedAtMs = HashMap<String, Long>()
+    private val appUid = Process.myUid() != 2000
     private val gears = GearReader(adapter = { device(CAR_ADAPTER) })
-    private val adapterType by lazy {
+    private val adapterType: Class<*>? by lazy {
+        if (!appUid) return@lazy null
+        if (!BydSdk.ensure(context) && !BydSdk.isLoadable(context)) return@lazy null
         try {
             Class.forName(CAR_ADAPTER)
         } catch (e: ClassNotFoundException) {
@@ -47,19 +52,24 @@ class VehicleTelemetry(
         if (statistic == null && bodywork == null && gearbox == null && power == null && ota == null && gear == null) {
             return null
         }
+        // Open-DiKey BydVehicleInfoController: Statistic getters for SOC / range / fuel / kWh.
         val soc = socOf(read(statistic, "getElecPercentageValue")?.toDouble())
         val fuel = fuelOf(read(statistic, "getFuelPercentageValue")?.toInt())
         val fuelRange = fuelRangeOf(read(statistic, "getFuelDrivingRangeValue")?.toInt())
-        // An electric car answers one fuel getter with a plausible number, never both.
-        val burnsFuel = fuel != null && fuelRange != null
+        val remainingKwh = batteryKwhOf(
+            read(statistic, "getEVRemainingBatteryPower")?.toDouble()
+                ?: read(power, "getBatteryRemainPowerEV")?.toDouble(),
+            soc
+        ) {
+            read(statistic, "getRemainingBatteryPower")?.toInt()
+        }
         return VehicleSnapshot(
             soc = soc,
-            rangeKm = rangeOf(read(statistic, "getElecDrivingRangeValue")?.toInt()),
-            batteryKwh = batteryKwhOf(read(power, "getBatteryRemainPowerEV")?.toDouble(), soc) {
-                read(statistic, "getRemainingBatteryPower")?.toInt()
-            },
-            fuelPercent = if (burnsFuel) fuel else null,
-            fuelRangeKm = if (burnsFuel) fuelRange else null,
+            rangeKm = rangeOf(read(statistic, "getElecDrivingRangeValue")?.toInt())
+                ?: rangeOf(read(statistic, "getDrivingRangeAll")?.toInt()),
+            batteryKwh = remainingKwh,
+            fuelPercent = fuel,
+            fuelRangeKm = fuelRange,
             gear = gear,
             accOn = accOnOf(read(bodywork, "getPowerLevel")?.toInt()),
             locked = lockOf(read(ota, "getLFDoorLockState")?.toInt())
@@ -103,23 +113,39 @@ class VehicleTelemetry(
     }
 
     private fun resolve(className: String): Any? {
+        if (!appUid) return null
         // getInstance builds handlers, so the calling thread needs a looper.
         if (Looper.myLooper() == null) Looper.prepare()
         val device = (if (className == CAR_ADAPTER) adapterType else BydSdk.deviceClass(className, context))
             ?: return null
-        return try {
+        val getInstance = try {
             device.getMethod("getInstance", Context::class.java)
-                .invoke(null, BydPermissions(context))
+        } catch (e: NoSuchMethodException) {
+            warn("$className has no getInstance(Context)")
+            return null
+        }
+        // Open-DiKey vehicle info: plain app context first, then permission wrapper.
+        invokeGetInstance(getInstance, context.applicationContext ?: context)?.let { return it }
+        return try {
+            getInstance.invoke(null, BydPermissions(context))
         } catch (e: ReflectiveOperationException) {
-            warn("$className would not start: ${e.cause?.javaClass?.simpleName ?: e.javaClass.simpleName}")
+            val cause = e.cause ?: e
+            warn("$className would not start: ${cause.javaClass.simpleName}")
             null
         }
+    }
+
+    private fun invokeGetInstance(method: java.lang.reflect.Method, ctx: Context): Any? = try {
+        method.invoke(null, ctx)
+    } catch (_: ReflectiveOperationException) {
+        null
     }
 }
 
 // The head unit answers 0 for a signal it has not received yet.
+// Open-DiKey keeps 0..100 SOC; reject only non-finite / out of range.
 internal fun socOf(percent: Double?): Int? {
-    if (percent == null || !percent.isFinite() || percent <= 0.0 || percent > 100.0) return null
+    if (percent == null || !percent.isFinite() || percent < 0.0 || percent > 100.0) return null
     return Math.round(percent).toInt()
 }
 
@@ -130,19 +156,17 @@ internal fun fuelOf(percent: Int?): Int? = if (percent != null && percent in 1..
 
 internal fun fuelRangeOf(km: Int?): Int? = if (km != null && km in 1..1200) km else null
 
+// Open-DiKey usable kWh band for Statistic.getEVRemainingBatteryPower.
 internal inline fun batteryKwhOf(directKwh: Double?, soc: Int?, fallbackTenthsKwh: () -> Int?): Double? {
-    if (plausibleKwh(directKwh, soc)) return directKwh
-    val derived = fallbackTenthsKwh()?.div(10.0)
-    return if (plausibleKwh(derived, soc)) derived else null
+    acceptKwh(directKwh, soc)?.let { return it }
+    return acceptKwh(fallbackTenthsKwh()?.div(10.0), soc)
 }
 
-internal fun plausibleKwh(kwh: Double?, soc: Int?): Boolean {
-    if (kwh == null || !kwh.isFinite() || kwh <= 1.0 || kwh >= 120.0) return false
-    if (soc == null || soc <= 5) return kwh < 90.0
-    val capacity = kwh / (soc / 100.0)
-    if (capacity < 20.0 || capacity > 130.0) return false
-    // SOC echoes imply a pack near 100 kWh. Smaller packs can have similar numbers at low SOC.
-    return capacity <= 90.0 || kotlin.math.abs(kwh - soc) >= 5.0
+internal fun acceptKwh(kwh: Double?, soc: Int?): Double? {
+    if (kwh == null || !kwh.isFinite() || kwh !in 0.5..100.0) return null
+    // Wrong getters sometimes echo SOC% as "kWh".
+    if (soc != null && soc in 5..100 && kotlin.math.abs(kwh - soc) < 1.0) return null
+    return kwh
 }
 
 internal fun gearOf(mode: Int?): String? =

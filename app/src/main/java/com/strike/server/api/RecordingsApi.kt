@@ -94,6 +94,7 @@ class RecordingsApi(context: Context, private val shell: Shell) {
     fun settings(): Response {
         val payload = JSONObject()
         payload.put("values", values())
+        payload.put("activeLocation", storage.location())
         payload.put("volumes", volumesPayload())
         payload.put("bydApps", bydAppStates())
         payload.put("bydAppsWritable", shell.isAuthorised())

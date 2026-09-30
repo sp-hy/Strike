@@ -87,16 +87,26 @@ class WatchdogTest {
     }
 
     @Test
-    fun theLaunchPassesTheCameraJarAndExtractedLibraries() {
+    fun theLaunchPassesTheApkClasspathAndExtractedLibraries() {
         assertEquals(0, watchdog(listOf("3 0")))
 
-        assertTrue(file("classpath").readText().startsWith("/system/framework/bmmcamera.jar:"))
         assertTrue(file("classpath").readText().trim().endsWith("/base.apk"))
         val args = file("arguments").readLines()
         assertTrue(args.contains("-Djava.library.path=/app/lib/arm64:/system/lib64:/vendor/lib64:/product/lib64:/odm/lib64"))
         assertTrue(args.contains("--nice-name=strike_cam"))
         assertTrue(args.contains("com.strike.daemon.CameraDaemon"))
         assertTrue(args.contains("/app/lib/arm64"))
+    }
+
+    @Test
+    fun aReinstalledApkLaunchesWithTheLibrariesBesideIt() {
+        assertTrue(file("lib/arm64").mkdirs())
+        assertEquals(0, watchdog(listOf("3 0")))
+
+        val libs = temporary.root.absolutePath.replace('\\', '/') + "/lib/arm64"
+        val args = file("arguments").readLines()
+        assertTrue(args.any { it.startsWith("-Djava.library.path=$libs:") })
+        assertTrue(args.contains(libs))
     }
 
     @Test
@@ -207,7 +217,10 @@ class WatchdogTest {
         val output = file("output")
         val builder = ProcessBuilder(shell.absolutePath, script.name)
             .directory(temporary.root).redirectErrorStream(true).redirectOutput(output)
-        builder.environment()["PATH"] = shell.parentFile!!.absolutePath + File.pathSeparator + builder.environment()["PATH"]
+        val bin = shell.parentFile!!.absolutePath
+        val prior = builder.environment()["PATH"].orEmpty()
+        builder.environment()["PATH"] = listOf(bin, prior).filter { it.isNotEmpty() }
+            .joinToString(File.pathSeparator)
         val process = builder.start()
         try {
             assertTrue("Shell did not finish: ${output.readText()}", process.waitFor(20, TimeUnit.SECONDS))

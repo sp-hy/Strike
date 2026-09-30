@@ -13,3 +13,8 @@ captures/
 AGENTS.md
 
 .cursor/
+
+# Built by :app:buildFastCam / syncLibcxxShared (cloudflared/zrok stay committed)
+app/src/main/jniLibs/**/libc++_shared.so
+app/src/main/jniLibs/**/libfast_cam_capture.so
+app/src/main/jniLibs/**/libfast_cam_client.so

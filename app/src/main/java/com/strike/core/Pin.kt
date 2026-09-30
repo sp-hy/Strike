@@ -27,11 +27,14 @@ enum class PinCheck { OK, WRONG, LOCKED, UNSET }
 
 class Pin(
     private val store: File,
-    private val resetFlag: File = File("/data/local/tmp/.strike_pin_reset")
+    private val resetFlagOverride: File? = null
 ) {
 
     // Serialize attempt counting so concurrent requests cannot bypass lockout.
     private val lock = Any()
+
+    private fun resetFlag(): File =
+        resetFlagOverride ?: File(ScratchPaths.path(".strike_pin_reset"))
 
     init {
         factory
@@ -117,8 +120,8 @@ class Pin(
     }
 
     private fun recover() {
-        if (!resetFlag.isFile) return
-        val touched = resetFlag.lastModified()
+        if (!resetFlag().isFile) return
+        val touched = resetFlag().lastModified()
         if (touched <= 0L) return
         val held = read() ?: JSONObject()
         if (touched <= held.optLong("recoveredAtMs")) return
